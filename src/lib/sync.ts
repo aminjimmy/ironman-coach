@@ -31,11 +31,57 @@ export async function stravaToken(): Promise<string> {
 }
 
 /** Handle ?code=... after the Strava OAuth redirect. Returns a status message or null. */
-export async function handleOAuthRedirect(): Promise<string | null> {
+export const OAUTH_PARAMS = "strava-oauth-params";
+const OAUTH_INFLIGHT = "strava-oauth-inflight";
+
+const session = {
+  get: (k: string) => { try { return sessionStorage.getItem(k); } catch { return null; } },
+  set: (k: string, v: string) => { try { sessionStorage.setItem(k, v); } catch { /* ignore */ } },
+  del: (k: string) => { try { sessionStorage.removeItem(k); } catch { /* ignore */ } },
+};
+
+/**
+ * Called first thing on page load: moves Strava's one-time ?code=... out of the address bar into
+ * sessionStorage, so a reload (e.g. an app update) can never send the same code to Strava twice.
+ */
+export function captureOAuthParams() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("state") !== "strava") return;
+  try {
+    sessionStorage.setItem(OAUTH_PARAMS, location.search);
+  } catch {
+    /* handled from location below */
+  }
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+
+function takeOAuthParams(): URLSearchParams | null {
+  const saved = session.get(OAUTH_PARAMS);
+  if (saved) {
+    session.del(OAUTH_PARAMS); // consume: each code is exchanged at most once
+    return new URLSearchParams(saved);
+  }
   const q = new URLSearchParams(location.search);
   if (q.get("state") !== "strava") return null;
   history.replaceState(null, "", location.pathname + location.hash);
-  const { settings, setSettings, setStrava, profile, setProfile } = useApp.getState();
+  return q;
+}
+
+export async function handleOAuthRedirect(): Promise<string | null> {
+  const { settings, setSettings, setStrava, profile, setProfile, strava: existing } = useApp.getState();
+  const q = takeOAuthParams();
+  if (!q || q.get("state") !== "strava") {
+    // A previous page was mid-login when it reloaded; its one-time code can't be reused safely.
+    if (session.get(OAUTH_INFLIGHT)) {
+      session.del(OAUTH_INFLIGHT);
+      if (!existing) {
+        const msg = "The Strava login was interrupted before it finished. Tap Connect with Strava again.";
+        setSettings({ lastSyncError: msg, lastSyncAttempt: Date.now() });
+        throw new Error(msg);
+      }
+    }
+    return null;
+  }
   const fail = (msg: string) => {
     setSettings({ lastSyncError: msg, lastSyncAttempt: Date.now() });
     throw new Error(msg);
@@ -54,11 +100,17 @@ export async function handleOAuthRedirect(): Promise<string | null> {
   if (!creds) fail("Your Strava Client ID and Secret were lost during the login redirect. Enter them again and tap Connect.");
 
   let result;
+  session.set(OAUTH_INFLIGHT, "1");
   try {
     result = await exchangeCode(code, creds!.clientId, creds!.clientSecret);
   } catch (e) {
-    fail((e as Error).message);
+    session.del(OAUTH_INFLIGHT);
+    const msg = (e as Error).message;
+    // A duplicate delivery of a code we already exchanged: already connected, nothing to do.
+    if (existing && /AuthorizationCode/.test(msg)) return null;
+    fail(msg);
   }
+  session.del(OAUTH_INFLIGHT);
   const { auth, athlete } = result!;
   setSettings({ stravaClientId: creds!.clientId, stravaClientSecret: creds!.clientSecret, stravaScope: scope, lastSyncError: undefined });
   setStrava(auth);

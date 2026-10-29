@@ -27,18 +27,36 @@ export interface StravaAthlete {
   sex?: "M" | "F";
 }
 
+/**
+ * Strava errors look like {"message":"Bad Request","errors":[{"resource":"Application","field":"client_secret","code":"invalid"}]}.
+ * Every error carries a "code" key, so match on resource/field, never on raw text.
+ */
+export function explainTokenError(status: number, body: string): string {
+  let errs: { resource?: string; field?: string; code?: string }[] = [];
+  try {
+    errs = JSON.parse(body).errors ?? [];
+  } catch {
+    /* not JSON */
+  }
+  const detail = errs.length ? errs.map((e) => [e.resource, e.field, e.code].filter(Boolean).join(" ")).join("; ") : body.slice(0, 160);
+  const has = (re: RegExp) => errs.some((e) => re.test(`${e.resource} ${e.field}`));
+  let msg: string;
+  if (has(/client_secret/i)) msg = "Strava rejected the Client Secret. Copy it again from strava.com/settings/api (tap 'show').";
+  else if (has(/client_id|Application/i)) msg = "Strava rejected the Client ID. Copy it again from strava.com/settings/api.";
+  else if (has(/redirect_uri/i)) msg = "Strava rejected the callback address. Set 'Authorization Callback Domain' to exactly " + location.hostname + ".";
+  else if (has(/AuthorizationCode|^ code/i)) msg = "Strava's one-time login code was already used or expired. Tap Connect with Strava again.";
+  else if (has(/RefreshToken/i)) msg = "Your Strava login has expired. Tap Disconnect, then Connect again.";
+  else msg = `Strava login failed (HTTP ${status}).`;
+  return `${msg} [Strava: ${detail || status}]`;
+}
+
 async function tokenRequest(body: Record<string, string>): Promise<{ auth: StravaAuth; athlete?: StravaAthlete }> {
   const res = await fetch("https://www.strava.com/oauth/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const body = await res.text();
-    if (/client_id|client_secret|invalid.*client/i.test(body)) throw new Error("Strava rejected the Client ID or Client Secret. Copy both again from strava.com/settings/api.");
-    if (/code/i.test(body)) throw new Error("Strava's login code expired or was already used. Tap Connect again.");
-    throw new Error(`Strava login failed (${res.status}): ${body.slice(0, 200)}`);
-  }
+  if (!res.ok) throw new Error(explainTokenError(res.status, await res.text()));
   const j = await res.json();
   return {
     auth: {
