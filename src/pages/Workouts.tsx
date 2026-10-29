@@ -15,6 +15,7 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
   const strava = useApp((s) => s.strava);
   const mergeActivities = useApp((s) => s.mergeActivities);
   const lastSync = useApp((s) => s.settings.lastSync);
+  const syncError = useApp((s) => s.settings.lastSyncError);
   const [filter, setFilter] = useState<Sport | "all">("all");
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -80,6 +81,13 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
           <input ref={fileRef} type="file" accept=".fit,.gpx,.tcx" multiple hidden onChange={(e) => onFiles(e.target.files)} />
         </div>
       </div>
+
+      {syncError && (
+        <div className="card small" role="alert" style={{ borderColor: "var(--bad)", color: "var(--text-2)" }}>
+          <b style={{ color: "var(--bad)" }}>Strava sync failed:</b> {syncError}{" "}
+          <a href="#/settings" onClick={(e) => { e.preventDefault(); go("settings"); }}>Open Strava settings</a>
+        </div>
+      )}
 
       <div className="tabs">
         {(["all", "swim", "bike", "run", "strength", "other"] as const).map((s) => (

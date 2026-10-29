@@ -33,7 +33,12 @@ async function tokenRequest(body: Record<string, string>): Promise<{ auth: Strav
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Strava auth failed (${res.status}): ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    if (/client_id|client_secret|invalid.*client/i.test(body)) throw new Error("Strava rejected the Client ID or Client Secret. Copy both again from strava.com/settings/api.");
+    if (/code/i.test(body)) throw new Error("Strava's login code expired or was already used. Tap Connect again.");
+    throw new Error(`Strava login failed (${res.status}): ${body.slice(0, 200)}`);
+  }
   const j = await res.json();
   return {
     auth: {
@@ -70,8 +75,13 @@ export async function freshToken(
 async function get<T>(token: string, path: string): Promise<T> {
   const res = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (res.status === 429) throw new Error("Strava rate limit reached (100 requests / 15 min). Try again in a few minutes.");
-  if (res.status === 401) throw new Error("Strava access expired or was revoked. Reconnect Strava in Settings.");
-  if (!res.ok) throw new Error(`Strava request failed (${res.status})`);
+  if (res.status === 401 || res.status === 403) {
+    const body = await res.text();
+    if (/activity:read/i.test(body))
+      throw new Error("Strava didn't give permission to read your activities. Tap Disconnect, then Connect again and keep \"View data about your activities\" ticked.");
+    throw new Error("Strava access was revoked or expired. Tap Disconnect, then Connect again.");
+  }
+  if (!res.ok) throw new Error(`Strava request failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
   return res.json() as Promise<T>;
 }
 

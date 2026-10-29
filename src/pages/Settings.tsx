@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { clear } from "idb-keyval";
 import { useApp } from "../lib/store";
 import { authorizeUrl, redirectUri } from "../lib/strava";
-import { syncStrava } from "../lib/sync";
+import { rememberCredentials, syncStrava } from "../lib/sync";
 import { demoActivities } from "../lib/demo";
 import { Card, Spinner, toast } from "../components/ui";
 
@@ -34,9 +34,24 @@ export function Settings({ go }: { go: (r: string) => void }) {
   }, []);
 
   const connect = () => {
-    setSettings({ stravaClientId: id.trim(), stravaClientSecret: secret.trim() });
+    rememberCredentials(id.trim(), secret.trim());
+    setSettings({ stravaClientId: id.trim(), stravaClientSecret: secret.trim(), lastSyncError: undefined });
     location.href = authorizeUrl(id.trim());
   };
+
+  const runSync = async (full: boolean) => {
+    setBusy(true);
+    try {
+      const n = await syncStrava({ full });
+      toast(n ? `Synced ${n} activities` : "Already up to date");
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const stravaCount = acts.filter((a) => a.source === "strava").length;
+  const fmtTime = (t?: number) => (t ? new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "never");
 
   const exportData = () => {
     const { profile, weights, events, activeEventId, activities, foods } = useApp.getState();
@@ -76,15 +91,25 @@ export function Settings({ go }: { go: (r: string) => void }) {
           {strava ? (
             <div className="stack">
               <div>✅ Connected{strava.athleteName ? ` as ${strava.athleteName}` : ""}</div>
+              <div className="stats">
+                <div className="stat"><div className="v">{stravaCount}</div><div className="l">Strava workouts in app</div></div>
+                <div className="stat"><div className="v" style={{ fontSize: "0.95rem" }}>{fmtTime(settings.lastSync)}</div><div className="l">Last successful sync{settings.lastSyncCount != null ? ` · ${settings.lastSyncCount} fetched` : ""}</div></div>
+              </div>
+              {settings.lastSyncError && (
+                <div className="small" role="alert" style={{ color: "var(--bad)", background: "rgba(255,92,92,0.1)", padding: "8px 10px", borderRadius: 10 }}>
+                  ⚠️ Last sync failed ({fmtTime(settings.lastSyncAttempt)}): {settings.lastSyncError}
+                </div>
+              )}
+              {settings.stravaScope && !/activity:read/.test(settings.stravaScope) && (
+                <div className="small" style={{ color: "var(--warn)" }}>Activity permission missing. Disconnect and connect again.</div>
+              )}
               <label className="row small">
                 <input type="checkbox" checked={settings.autoSync} onChange={(e) => setSettings({ autoSync: e.target.checked })} style={{ width: 20, minHeight: 20 }} />
                 Auto-sync when the app opens
               </label>
               <div className="row">
-                <button className="btn strava" disabled={busy} onClick={async () => {
-                  setBusy(true);
-                  try { toast(`Synced ${await syncStrava()} activities`); } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
-                }}>{busy ? <Spinner /> : "Sync now"}</button>
+                <button className="btn strava" disabled={busy} onClick={() => runSync(false)}>{busy ? <Spinner /> : "Sync now"}</button>
+                <button className="btn" disabled={busy} onClick={() => runSync(true)}>Re-sync last 26 weeks</button>
                 <button className="btn danger" onClick={() => { if (confirm("Disconnect Strava? Synced workouts stay in the app.")) setStrava(null); }}>Disconnect</button>
               </div>
             </div>
@@ -100,6 +125,11 @@ export function Settings({ go }: { go: (r: string) => void }) {
                 <label className="field"><span>Client ID</span><input inputMode="numeric" value={id} onChange={(e) => setId(e.target.value)} /></label>
                 <label className="field"><span>Client Secret</span><input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
               </div>
+              {settings.lastSyncError && (
+                <div className="small" role="alert" style={{ color: "var(--bad)", background: "rgba(255,92,92,0.1)", padding: "8px 10px", borderRadius: 10 }}>
+                  ⚠️ {settings.lastSyncError}
+                </div>
+              )}
               <button className="btn strava" disabled={!id.trim() || !secret.trim()} onClick={connect}>Connect with Strava</button>
               <div className="tiny muted">Redirects back to <code>{redirectUri()}</code>. Keys stay on this device.</div>
             </div>

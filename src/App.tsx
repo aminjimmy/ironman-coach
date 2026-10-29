@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "./lib/store";
 import { useDerived } from "./lib/useDerived";
-import { handleOAuthRedirect, syncStrava } from "./lib/sync";
+import { handleOAuthRedirect, isSyncing, syncStrava } from "./lib/sync";
 import { demoActivities } from "./lib/demo";
 import { Today } from "./pages/Today";
 import { PlanPage } from "./pages/PlanPage";
@@ -43,24 +43,38 @@ export default function App() {
   // Strava OAuth return + auto-sync on open / when the app comes back to the foreground
   useEffect(() => {
     if (!hydrated) return;
-    handleOAuthRedirect()
-      .then((msg) => {
-        if (msg) {
-          toast(msg);
-          if (useApp.getState().strava) return syncStrava().then((n) => toast(`Synced ${n} activities from Strava`));
-        }
-      })
-      .catch((e) => toast((e as Error).message));
+    let busy = true; // OAuth return being handled; nothing else may touch the store meanwhile
 
-    const maybeSync = () => {
+    const autoSync = () => {
       const { strava, settings } = useApp.getState();
-      if (document.visibilityState !== "visible" || !strava || !settings.autoSync) return;
+      if (!strava || !settings.autoSync || isSyncing()) return;
       if (settings.lastSync && Date.now() - settings.lastSync < 30 * 60_000) return;
       syncStrava().then((n) => n && toast(`Synced ${n} new activit${n === 1 ? "y" : "ies"}`)).catch(() => {});
     };
-    maybeSync();
-    document.addEventListener("visibilitychange", maybeSync);
-    return () => document.removeEventListener("visibilitychange", maybeSync);
+
+    handleOAuthRedirect()
+      .then((msg) => {
+        if (!msg) return autoSync();
+        toast(`${msg}. Syncing your workouts…`);
+        return syncStrava({ full: true }).then((n) => toast(`Synced ${n} activities from Strava`));
+      })
+      .catch((e) => toast((e as Error).message))
+      .finally(() => (busy = false));
+
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible" || busy || isSyncing()) return;
+      busy = true;
+      try {
+        // Another window (e.g. the Chrome tab Strava redirected to) may have saved newer data:
+        // reload it first so this window never writes stale state back.
+        await useApp.persist.rehydrate();
+      } finally {
+        busy = false;
+      }
+      autoSync();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [hydrated]);
 
   if (!hydrated) return <div style={{ display: "grid", placeItems: "center", height: "100dvh" }}><Spinner /></div>;

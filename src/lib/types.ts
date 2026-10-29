@@ -106,5 +106,9 @@ export interface Settings {
   stravaClientSecret: string;
   anthropicKey: string;
   autoSync: boolean;
-  lastSync?: number; // epoch ms
+  lastSync?: number; // epoch ms of last successful sync
+  lastSyncAttempt?: number;
+  lastSyncCount?: number;
+  lastSyncError?: string;
+  stravaScope?: string; // scopes the athlete actually granted
 }
