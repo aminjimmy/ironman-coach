@@ -1,0 +1,22 @@
+name: Strava CORS diagnostic
+on:
+  push:
+    branches: [diag]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Strava endpoints with a browser Origin
+        run: |
+          O="Origin: https://aminjimmy.github.io"
+          probe() {
+            label="$1"; shift
+            h=$(curl -s -D - -o /dev/null "$@" | tr -d '\r' | grep -iE '^HTTP|^access-control' | tr '\n' ' ')
+            echo "::warning title=$label::$h"
+          }
+          probe "token-preflight-json" -X OPTIONS https://www.strava.com/oauth/token -H "$O" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type"
+          probe "token-post-json" -X POST https://www.strava.com/oauth/token -H "$O" -H "Content-Type: application/json" -d '{"client_id":"1","client_secret":"x","code":"x","grant_type":"authorization_code"}'
+          probe "token-post-form" -X POST https://www.strava.com/oauth/token -H "$O" -d client_id=1 -d client_secret=x -d code=x -d grant_type=authorization_code
+          probe "api-preflight-auth" -X OPTIONS "https://www.strava.com/api/v3/athlete/activities" -H "$O" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: authorization"
+          probe "api-get-bearer" "https://www.strava.com/api/v3/athlete/activities" -H "$O" -H "Authorization: Bearer x"
+          probe "api-get-querytoken" "https://www.strava.com/api/v3/athlete/activities?access_token=x" -H "$O"
