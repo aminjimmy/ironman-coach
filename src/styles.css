@@ -231,3 +231,13 @@ table.data td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
 ol.guide { padding-left: 18px; margin: 6px 0; color: var(--text-2); font-size: 0.86rem; }
 ol.guide li { margin: 4px 0; }
 code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; font-size: 0.82rem; word-break: break-all; }
+
+@media (max-width: 380px) { .nav button { font-size: 0.66rem; } }
+
+@media print {
+  :root { --bg: #fff; --surface: #fff; --surface-2: #f3f4f6; --border: #d1d5db; --text: #111; --text-2: #333; --muted: #555; }
+  body { background: #fff; color: #111; }
+  .nav, .no-print, .toast { display: none !important; }
+  .main { padding: 0; max-width: none; }
+  .card { break-inside: avoid; box-shadow: none; }
+}

@@ -1,10 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Zone } from "../lib/metrics";
 import { zoneRangeLabel } from "../lib/metrics";
-import type { PlannedSession } from "../lib/plan";
-import type { Activity } from "../lib/types";
-import { fmtDuration, fmtHours, SPORT_META } from "../lib/format";
-import { sessionFueling } from "../lib/coach";
+import { fmtDuration, fmtHours } from "../lib/format";
 
 export function Card({ title, right, children, className = "" }: { title?: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -77,35 +74,6 @@ export function ZoneBars({ zones, secs, kind }: { zones: Zone[]; secs: number[];
         </div>
       ))}
     </div>
-  );
-}
-
-export function SessionCard({ s, done, scale = 1, expanded, onToggle }: {
-  s: PlannedSession; done?: Activity; scale?: number; expanded?: boolean; onToggle?: () => void;
-}) {
-  const meta = s.sport === "rest" ? { color: "#3a4352", icon: "😴", label: "Rest" } : SPORT_META[s.sport];
-  const minutes = s.kind === "race" ? s.minutes : Math.round((s.minutes * scale) / 5) * 5;
-  return (
-    <button className={`session ${done ? "done" : ""}`} style={{ ["--c" as string]: meta.color }} onClick={onToggle}>
-      <span className="ic" aria-hidden>{meta.icon}</span>
-      <div className="grow">
-        <div className="spread">
-          <span className="title">{s.title}</span>
-          {done ? <span className="check">✓ {fmtHours(done.movingTime)}</span> : s.minutes > 0 && <span className="muted small num">{fmtHours(minutes * 60)}</span>}
-        </div>
-        <div className="row" style={{ marginTop: 3 }}>
-          {s.key && <span className="pill key">Key</span>}
-          {s.zone > 0 && <span className="pill">Z{s.zone}</span>}
-          {scale !== 1 && s.kind !== "race" && s.sport !== "rest" && <span className="pill est">adjusted {scale > 1 ? "+" : ""}{Math.round((scale - 1) * 100)}%</span>}
-        </div>
-        {expanded && (
-          <>
-            <div className="desc">{s.description}</div>
-            {s.sport !== "rest" && s.sport !== "strength" && <div className="desc">⛽ {sessionFueling(minutes, s.kind)}</div>}
-          </>
-        )}
-      </div>
-    </button>
   );
 }
 

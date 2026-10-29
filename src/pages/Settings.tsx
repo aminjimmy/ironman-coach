@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { clear } from "idb-keyval";
-import { useApp } from "../lib/store";
+import { useApp, syncedSnapshot } from "../lib/store";
+import { calendarUrl, syncCloud } from "../lib/cloud";
 import { authorizeUrl, redirectUri } from "../lib/strava";
 import { rememberCredentials, syncStrava } from "../lib/sync";
 import { demoActivities } from "../lib/demo";
@@ -54,8 +55,7 @@ export function Settings({ go }: { go: (r: string) => void }) {
   const fmtTime = (t?: number) => (t ? new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "never");
 
   const exportData = () => {
-    const { profile, weights, events, activeEventId, activities, foods } = useApp.getState();
-    const blob = new Blob([JSON.stringify({ version: 1, profile, weights, events, activeEventId, activities, foods }, null, 1)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ version: 2, ...syncedSnapshot(useApp.getState()) }, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `ironman-coach-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -67,7 +67,7 @@ export function Settings({ go }: { go: (r: string) => void }) {
     try {
       const data = JSON.parse(await f.text());
       if (!data.version) throw new Error("Not a backup file");
-      if (!confirm("Replace profile, events, workouts and food log with this backup?")) return;
+      if (!confirm("Replace profile, plan changes, workouts, food log and check-ins with this backup?")) return;
       importBackup(data);
       toast("Backup restored");
     } catch (e) {
@@ -166,6 +166,8 @@ export function Settings({ go }: { go: (r: string) => void }) {
           )}
         </Card>
 
+        <CloudCard />
+
         <Card title="Data">
           <div className="stack">
             <div className="row">
@@ -190,5 +192,92 @@ export function Settings({ go }: { go: (r: string) => void }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+function CloudCard() {
+  const settings = useApp((s) => s.settings);
+  const profile = useApp((s) => s.profile);
+  const { setSettings, setProfile } = useApp.getState();
+  const [token, setToken] = useState(settings.githubToken ?? "");
+  const [pass, setPass] = useState(settings.cloudPassphrase ?? "");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const enabled = !!(settings.githubToken && settings.cloudPassphrase);
+  const cal = calendarUrl();
+  const fmtTime = (t?: number) => (t ? new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "never");
+
+  const run = async () => {
+    setSettings({ githubToken: token.trim(), cloudPassphrase: pass });
+    setBusy(true);
+    try {
+      toast(await syncCloud());
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="☁️ Cloud backup & sync" right={enabled && <span className="pill ok">on</span>}>
+      <div className="stack">
+        <div className="small" style={{ color: "var(--text-2)" }}>
+          Keeps your data in a private, encrypted backup in your GitHub account, so it's safe if you lose the phone and
+          stays the same on every device or browser you use. Also gives you a calendar link that updates itself.
+        </div>
+        {!enabled && (
+          <ol className="guide">
+            <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer">github.com → new fine-grained token</a>.</li>
+            <li>Name it "Ironman Coach", expiry 1 year, then under <b>Account permissions → Gists</b> choose <b>Read and write</b>. Generate and copy.</li>
+            <li>Paste it below, choose a passphrase you'll remember (needed on each device), then tap Turn on.</li>
+          </ol>
+        )}
+        <div className="form-grid">
+          <label className="field">
+            <span>GitHub token</span>
+            <input type="password" value={token} placeholder="github_pat_…" onChange={(e) => setToken(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Encryption passphrase</span>
+            <input type={show ? "text" : "password"} value={pass} onChange={(e) => setPass(e.target.value)} placeholder="at least 8 characters" />
+            <span className="hint"><a href="#" onClick={(e) => { e.preventDefault(); setShow(!show); }}>{show ? "Hide" : "Show"}</a> · not recoverable if forgotten</span>
+          </label>
+        </div>
+        <div className="row">
+          <button className="btn primary" disabled={busy || !token.trim() || pass.length < 8} onClick={run}>{busy ? <Spinner /> : enabled ? "Sync now" : "Turn on & back up"}</button>
+          {enabled && (
+            <button className="btn danger" onClick={() => { if (confirm("Turn off cloud sync on this device? The backup stays in your GitHub account.")) setSettings({ githubToken: undefined, cloudPassphrase: undefined }); }}>
+              Turn off
+            </button>
+          )}
+        </div>
+        {enabled && <div className="small muted">Last backup: {fmtTime(settings.lastCloudSync)}. Syncs on open and ~20 s after changes.</div>}
+        {settings.cloudError && (
+          <div className="small" role="alert" style={{ color: "var(--bad)", background: "rgba(255,92,92,0.1)", padding: "8px 10px", borderRadius: 10 }}>⚠️ {settings.cloudError}</div>
+        )}
+        <hr className="hr" />
+        <h3>📆 Calendar</h3>
+        <label className="field" style={{ maxWidth: 220 }}>
+          <span>Usual training time (for calendar events)</span>
+          <input type="time" value={profile?.trainingTime ?? "06:00"} onChange={(e) => profile && setProfile({ ...profile, trainingTime: e.target.value })} />
+        </label>
+        {cal ? (
+          <div className="small" style={{ color: "var(--text-2)" }}>
+            Auto-updating calendar link (subscribe once, it follows plan changes; Google refreshes it every few hours):
+            <div className="row" style={{ marginTop: 6, flexWrap: "nowrap" }}>
+              <code style={{ flex: 1, minWidth: 0 }}>{cal}</code>
+              <button className="btn sm" onClick={() => navigator.clipboard.writeText(cal).then(() => toast("Link copied"))}>Copy</button>
+            </div>
+            <div className="tiny muted" style={{ marginTop: 6 }}>
+              Google Calendar on a computer: Other calendars → + → From URL → paste. It then appears on your phone too.
+              Only the training plan is in this link (no health or food data).
+            </div>
+          </div>
+        ) : (
+          <div className="small muted">Turn on cloud sync for an auto-updating calendar link, or use Plan → "Add to calendar" for a one-off import.</div>
+        )}
+      </div>
+    </Card>
   );
 }

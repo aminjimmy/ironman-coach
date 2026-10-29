@@ -3,7 +3,7 @@ import { useApp } from "../lib/store";
 import type { Derived } from "../lib/useDerived";
 import type { EventType, Profile, RaceEvent } from "../lib/types";
 import { EVENTS } from "../lib/plan";
-import { age, hrZones, powerZones, runZones, swimZones, zoneRangeLabel, estimateFtp, estimateRunPace, estimateCss } from "../lib/metrics";
+import { age, hrZones, powerZones, runZones, swimZones, zoneRangeLabel, estimateFtp, estimateRunPace, estimateCss, usable } from "../lib/metrics";
 import { bmr } from "../lib/coach";
 import { DAY_NAMES_LONG, daysBetween, fmtDate, fmtPace, parseMinSec, round, uid, ymd, addDays } from "../lib/format";
 import { Card, Sheet, Stat, toast } from "../components/ui";
@@ -170,7 +170,8 @@ export function Me({ d, go }: { d: Derived; go: (r: string) => void }) {
   const t = d.t;
   const bmi = profile.weightKg / (profile.heightCm / 100) ** 2;
 
-  const est = { ftp: estimateFtp(acts), run: estimateRunPace(acts), css: estimateCss(acts) };
+  const trusted = usable(acts, t);
+  const est = { ftp: estimateFtp(trusted), run: estimateRunPace(trusted), css: estimateCss(trusted) };
 
   return (
     <div className="stack">

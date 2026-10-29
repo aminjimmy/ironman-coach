@@ -4,7 +4,10 @@ import type { Derived } from "../lib/useDerived";
 import type { FoodEntry, FoodItem } from "../lib/types";
 import { macroTargets, sessionFueling, sumMacros } from "../lib/coach";
 import { sessionsOn } from "../lib/plan";
-import { addDays, fmtDate, round, uid, ymd, SPORT_META } from "../lib/format";
+import { addDays, daysBetween, fmtDate, round, uid, ymd, SPORT_META } from "../lib/format";
+import { searchFoods } from "../lib/foods";
+import { typicalSweatRate, fluidPlan } from "../lib/heat";
+import type { FoodTemplate } from "../lib/types";
 import { Card, MacroRing, Sheet, Spinner, Stat, toast } from "../components/ui";
 
 const MEALS: FoodEntry["meal"][] = ["breakfast", "lunch", "dinner", "snack", "fuel"];
@@ -32,7 +35,11 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
   const dayFoods = foods.filter((f) => f.date === date).sort((a, b) => (a.time < b.time ? -1 : 1));
   const dayActs = acts.filter((a) => a.start.slice(0, 10) === date);
   const planned = sessionsOn(d.plan, date);
-  const tg = macroTargets(profile, dayActs, planned);
+  // carb-load: 2 days before long-course races, 1 day before short ones
+  const daysToRace = d.plan ? daysBetween(date, d.plan.event.date) : -1;
+  const loadDays = d.plan && d.plan.spec.bikeKm >= 90 ? 2 : 1;
+  const carbLoad = daysToRace >= 1 && daysToRace <= loadDays ? (loadDays === 2 ? 9 : 7) : undefined;
+  const tg = macroTargets(profile, dayActs, planned, carbLoad);
   const eaten = sumMacros(dayFoods);
 
   const pick = async (file?: File | null) => {
@@ -97,6 +104,12 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
         </div>
       </div>
 
+      {carbLoad && (
+        <div className="card small" style={{ borderColor: "var(--warn)" }}>
+          🍚 <b>Carb-loading day</b> ({daysToRace} day{daysToRace > 1 ? "s" : ""} to race): aim for {Math.round(profile.weightKg * carbLoad)} g carbs ({carbLoad} g/kg) from rice, noodles, bread, juice; keep fibre and fat low.
+        </div>
+      )}
+
       <div className="grid two">
         <Card title="Daily targets" right={<span className="pill">{round(tg.trainingHours, 1)} h training</span>}>
           <div className="ring-wrap">
@@ -139,6 +152,11 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
             </>
           )}
         </Card>
+      </div>
+
+      <div className="grid two">
+        <QuickAdd date={date} onPick={(items, title, meal) => setDraft({ id: uid(), date, time: new Date().toTimeString().slice(0, 5), meal: meal ?? guessMeal(), title, items })} />
+        <WaterCard date={date} trainingHours={tg.trainingHours} />
       </div>
 
       <Card title="Meals" right={<span className="small muted num">{Math.round(eaten.calories)} kcal</span>}>
@@ -232,7 +250,10 @@ function FoodEditor({ entry, onSave, onCancel, onDelete }: {
     <div className="stack">
       <div className="spread">
         <h2>{onDelete ? "Edit meal" : "Review meal"}</h2>
-        {e.confidence && <span className={`pill ${e.confidence === "high" ? "ok" : "est"}`}>{e.confidence} confidence</span>}
+        <div className="row">
+          {e.confidence && <span className={`pill ${e.confidence === "high" ? "ok" : "est"}`}>{e.confidence} confidence</span>}
+          <FavStar entry={e} />
+        </div>
       </div>
       {e.photo && <img className="photo-lg" src={e.photo} alt="" style={{ maxHeight: 160 }} />}
       {e.notes && <div className="small muted">🤖 {e.notes}</div>}
@@ -288,5 +309,121 @@ function FoodEditor({ entry, onSave, onCancel, onDelete }: {
       </div>
       <p className="tiny muted">AI estimates from photos are typically within ±20–30%. Adjust portions if you know them.</p>
     </div>
+  );
+}
+
+function FavStar({ entry }: { entry: FoodEntry }) {
+  const favs = useApp((s) => s.foodFavorites);
+  const toggleFavorite = useApp((s) => s.toggleFavorite);
+  const title = entry.title || entry.items.map((x) => x.name).filter(Boolean).join(", ");
+  const on = favs.some((f) => f.title.toLowerCase() === title.toLowerCase());
+  return (
+    <button
+      className="btn sm ghost"
+      disabled={!title}
+      aria-pressed={on}
+      onClick={() => {
+        toggleFavorite({ id: uid(), title, items: entry.items, meal: entry.meal });
+        toast(on ? "Removed from favourites" : "Saved to favourites");
+      }}
+    >
+      {on ? "★ Favourite" : "☆ Favourite"}
+    </button>
+  );
+}
+
+/** One-tap re-logging of favourites and recent meals, plus typical Malaysian dishes. */
+function QuickAdd({ date, onPick }: { date: string; onPick: (items: FoodEntry["items"], title: string, meal?: FoodEntry["meal"]) => void }) {
+  const favs = useApp((s) => s.foodFavorites);
+  const foods = useApp((s) => s.foods);
+  const addFood = useApp((s) => s.addFood);
+  const [tab, setTab] = useState<"fav" | "recent" | "local">(favs.length ? "fav" : "recent");
+  const [q, setQ] = useState("");
+
+  const recent: FoodTemplate[] = [];
+  const seen = new Set<string>();
+  for (const f of [...foods].sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1))) {
+    const k = f.title.toLowerCase();
+    if (!f.title || seen.has(k)) continue;
+    seen.add(k);
+    recent.push({ id: f.id, title: f.title, items: f.items, meal: f.meal });
+    if (recent.length >= 8) break;
+  }
+
+  const logNow = (t: FoodTemplate) => {
+    addFood({ id: uid(), date, time: new Date().toTimeString().slice(0, 5), meal: t.meal ?? guessMeal(), title: t.title, items: t.items.map((i) => ({ ...i })) });
+    toast(`Logged ${t.title} (tap the meal below to edit or delete)`);
+  };
+  const list = tab === "fav" ? favs : recent;
+
+  return (
+    <Card title="Quick add">
+      <div className="tabs" style={{ marginBottom: 8 }}>
+        <button className={tab === "fav" ? "on" : ""} onClick={() => setTab("fav")}>★ Favourites</button>
+        <button className={tab === "recent" ? "on" : ""} onClick={() => setTab("recent")}>Recent</button>
+        <button className={tab === "local" ? "on" : ""} onClick={() => setTab("local")}>🇲🇾 Local dishes</button>
+      </div>
+      {tab === "local" ? (
+        <>
+          <input placeholder="Search: nasi lemak, roti, teh tarik…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <div className="list">
+            {searchFoods(q).map((f) => (
+              <button key={f.name} className="list-item" onClick={() => onPick([{ ...f }], f.name)}>
+                <div className="grow small">
+                  <div style={{ fontWeight: 600 }}>{f.name}</div>
+                  <div className="muted num">{f.calories} kcal · C {f.carbs} · P {f.protein} · F {f.fat} · ~{f.grams} g</div>
+                </div>
+                <span className="muted">＋</span>
+              </button>
+            ))}
+          </div>
+          <p className="tiny muted">Typical hawker portions; adjust grams to what you ate.</p>
+        </>
+      ) : list.length ? (
+        <div className="list">
+          {list.map((t) => {
+            const m = sumMacros([{ id: "", date, time: "", meal: "snack", title: t.title, items: t.items }]);
+            return (
+              <button
+                key={t.id}
+                className="list-item"
+                onClick={() => logNow(t)}
+              >
+                <div className="grow small">
+                  <div style={{ fontWeight: 600 }}>{t.title}</div>
+                  <div className="muted num">{Math.round(m.calories)} kcal · C {Math.round(m.carbs)} · P {Math.round(m.protein)} · F {Math.round(m.fat)}</div>
+                </div>
+                <span className="pill">Log</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="small muted">{tab === "fav" ? "Star a meal in its editor to keep it here." : "Meals you log appear here for one-tap re-logging."}</p>
+      )}
+    </Card>
+  );
+}
+
+function WaterCard({ date, trainingHours }: { date: string; trainingHours: number }) {
+  const profile = useApp((s) => s.profile)!;
+  const ml = useApp((s) => s.water[date] ?? 0);
+  const tests = useApp((s) => s.sweatTests);
+  const sodium = useApp((s) => s.racePrefs.sodiumMgPerL);
+  const addWater = useApp((s) => s.addWater);
+  const sweat = typicalSweatRate(tests, profile.weightKg).lph;
+  // daily baseline + replacing most of what training sweats out
+  const target = Math.round((profile.weightKg * 35 + trainingHours * fluidPlan(sweat, sodium).drinkLph * 1000 * 1.2) / 50) * 50;
+  const pct = Math.min(100, (ml / target) * 100);
+  return (
+    <Card title="💧 Water" right={<span className="small num muted">{(ml / 1000).toFixed(2)} / {(target / 1000).toFixed(1)} L</span>}>
+      <div className="bar" style={{ height: 12 }}><i style={{ width: `${pct}%`, background: "#3987e5" }} /></div>
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="btn grow" onClick={() => addWater(date, 250)}>+ 250 ml</button>
+        <button className="btn grow" onClick={() => addWater(date, 500)}>+ 500 ml</button>
+        <button className="btn" onClick={() => addWater(date, -250)} aria-label="Remove 250 ml">−</button>
+      </div>
+      <p className="tiny muted">Target: 35 ml/kg plus ~{Math.round(fluidPlan(sweat, sodium).drinkLph * 1000)} ml per training hour. Add electrolytes after long or hot sessions.</p>
+    </Card>
   );
 }

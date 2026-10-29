@@ -2,6 +2,7 @@ import type { EventType, Profile, RaceEvent, Sport } from "./types";
 import type { Thresholds } from "./metrics";
 import { hrZones, runZones, swimZones, zoneRangeLabel, age } from "./metrics";
 import { addDays, clamp, daysBetween, fmtDuration, fmtPace, ymd, weekStart } from "./format";
+import { treadmillLine } from "./workouts";
 
 export interface EventSpec {
   label: string;
@@ -80,7 +81,14 @@ export interface PlannedSession {
   zone: number; // 1-5 dominant intensity
   key: boolean;
   description: string;
-  kind: "rest" | "easy" | "quality" | "long" | "brick" | "technique" | "strength" | "race" | "openers";
+  kind: "rest" | "easy" | "quality" | "long" | "brick" | "technique" | "strength" | "race" | "openers" | "test";
+  /** Stable identity (original date|sport|kind) used to remember done/skipped/moved marks. */
+  uid: string;
+  test?: "ftp" | "run" | "css";
+  treadmill?: string;
+  status?: "done" | "skipped";
+  originalDate?: string; // set when the athlete moved the session
+  disrupted?: "sick" | "travel";
 }
 
 export interface PlanWeek {
@@ -130,6 +138,7 @@ export function layoutPhases(totalWeeks: number, type: EventType): Phase[] {
 
 interface Targets {
   t: Thresholds;
+  spec: EventSpec;
   weightKg: number;
   hr: (z: number) => string;
   pw: (lo: number, hi: number) => string;
@@ -146,6 +155,7 @@ function targets(t: Thresholds, spec: EventSpec, weightKg: number): Targets {
   const rpRace = t.runPace / spec.runFrac;
   return {
     t,
+    spec,
     weightKg,
     hr: (z) => zoneRangeLabel(hz[z - 1], "hr"),
     pw: (lo, hi) => `${Math.round(t.ftp * lo)}–${Math.round(t.ftp * hi)} W`,
@@ -160,7 +170,7 @@ const r5 = (m: number) => Math.max(0, Math.round(m / 5) * 5);
 
 // ---------- Session library ----------
 
-function bikeQuality(phase: Phase, type: EventType, wk: number, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function bikeQuality(phase: Phase, type: EventType, wk: number, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   const long = type === "full" || type === "half";
   let title = "Bike intervals";
   let d = "";
@@ -207,7 +217,7 @@ function bikeQuality(phase: Phase, type: EventType, wk: number, T: Targets, min:
   return { sport: "bike", title, minutes: min, zone, key: phase !== "prep", description: d, kind: "quality" };
 }
 
-function runQuality(phase: Phase, type: EventType, wk: number, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function runQuality(phase: Phase, type: EventType, wk: number, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   const long = type === "full" || type === "half";
   let title = "Run intervals";
   let d = "";
@@ -255,7 +265,7 @@ function runQuality(phase: Phase, type: EventType, wk: number, T: Targets, min: 
   return { sport: "run", title, minutes: min, zone, key: phase !== "prep", description: d, kind: "quality" };
 }
 
-function swimMain(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function swimMain(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   const css = fmtPace(T.t.swimCss);
   let title = "Swim technique";
   let d = `Drills: 8×50 (catch-up, fingertip drag, 6-kick switch), then 6×100 at ${T.sp(2)} with 20 s rest. Long, relaxed strokes.`;
@@ -279,7 +289,7 @@ function swimMain(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "
   return { sport: "swim", title, minutes: min, zone, key: phase === "build" || phase === "peak", description: d, kind: phase === "prep" ? "technique" : "quality" };
 }
 
-function swimEndurance(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function swimEndurance(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   return {
     sport: "swim",
     title: "Endurance swim",
@@ -294,7 +304,7 @@ function swimEndurance(phase: Phase, T: Targets, min: number): Omit<PlannedSessi
   };
 }
 
-function longBike(phase: Phase, type: EventType, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function longBike(phase: Phase, type: EventType, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   let d = `Steady Z2: ${T.pw(0.6, 0.72)} · ${T.hr(2)}. Fuel 60–90 g carbs/h and 500–750 ml fluid/h.`;
   let title = "Long ride";
   if (phase === "build") {
@@ -308,29 +318,55 @@ function longBike(phase: Phase, type: EventType, T: Targets, min: number): Omit<
   return { sport: "bike", title, minutes: min, zone: 2, key: true, description: d, kind: "long" };
 }
 
-function longRun(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date"> {
+function longRun(phase: Phase, T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> {
   let d = `Conversational Z2: ${T.rp(2)} · ${T.hr(2)}. Walk 1 min every 2 km if it keeps HR in Z2.`;
   if (phase === "build") d = `Z2 run, last 20–30 min at race pace ${T.raceRunPace}. Take a gel every 30–40 min.`;
   if (phase === "peak") d = `Long run with 3×10 min at race pace ${T.raceRunPace}. Rehearse race fueling.`;
   return { sport: "run", title: "Long run", minutes: min, zone: 2, key: true, description: d, kind: "long" };
 }
 
-const easyRun = (T: Targets, min: number): Omit<PlannedSession, "id" | "date"> => ({
+const easyRun = (T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> => ({
   sport: "run", title: "Easy run", minutes: min, zone: 2, key: false, kind: "easy",
   description: `Easy Z2: ${T.rp(2)} · keep HR under ${hrZones(T.t)[1].hi} bpm. Cadence 170–180 spm.`,
 });
 
-const easyBike = (T: Targets, min: number): Omit<PlannedSession, "id" | "date"> => ({
+const easyBike = (T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> => ({
   sport: "bike", title: "Endurance ride", minutes: min, zone: 2, key: false, kind: "easy",
   description: `Z1–2 spin at ${T.pw(0.55, 0.7)}, cadence 85–95 rpm.`,
 });
 
-const brickRun = (T: Targets, min: number): Omit<PlannedSession, "id" | "date"> => ({
+const brickRun = (T: Targets, min: number): Omit<PlannedSession, "id" | "date" | "uid"> => ({
   sport: "run", title: "Brick run (off the bike)", minutes: min, zone: 3, key: true, kind: "brick",
   description: `Straight off the bike: first 10 min at race pace ${T.raceRunPace} with quick cadence, then settle into Z2.`,
 });
 
-const strength = (phase: Phase, min: number): Omit<PlannedSession, "id" | "date"> => ({
+/** Short, technique-first swims for athletes returning after a break from the pool. */
+const swimComeback = (wk: number, min: number, second: boolean): Omit<PlannedSession, "id" | "date" | "uid"> => {
+  const cap = [25, 30, 35, 40][wk] ?? 40;
+  return {
+    sport: "swim", title: `Swim comeback ${wk + 1}/4${second ? " (easy)" : ""}`, minutes: Math.min(min, cap), zone: 1, key: false, kind: "technique",
+    description: second
+      ? "Relaxed continuous swimming in short blocks (4–6×100 m), plenty of rest. Stop before your stroke falls apart."
+      : `Re-learning feel for the water: 200 m easy, 8×25 m drills (catch-up, fingertip drag, side kick), ${["4×50", "6×50", "4×100", "6×100"][wk] ?? "6×100"} m relaxed with 20–30 s rest. Shoulders should feel fine the next day.`,
+  };
+};
+
+const TEST_SESSIONS: Record<"ftp" | "run" | "css", Omit<PlannedSession, "id" | "date" | "uid">> = {
+  ftp: {
+    sport: "bike", title: "FTP test (20 min)", minutes: 65, zone: 4, key: true, kind: "test", test: "ftp",
+    description: "Warm up 10 min + 3×1 min fast spin. 5 min hard, 10 min easy, then 20 min as hard as you can hold evenly. FTP = 95% of the 20-min average power. Enter it in Race → Tests to update your zones. (Download the Zwift file below.)",
+  },
+  run: {
+    sport: "run", title: "Run threshold test (30 min)", minutes: 50, zone: 4, key: true, kind: "test", test: "run",
+    description: "Warm up 15 min with 4 strides. Run 30 min solo at the best pace you can hold evenly (flat road, track, or treadmill at 1%). Threshold pace = average pace of the 30 min; threshold HR = average HR of the last 20 min. Enter both in Race → Tests.",
+  },
+  css: {
+    sport: "swim", title: "Swim CSS test (400 + 200)", minutes: 45, zone: 4, key: true, kind: "test", test: "css",
+    description: "Warm up 400 m easy + drills + 4×50 build. Swim 400 m time trial, rest 5–10 min easy, then 200 m time trial. CSS pace = (T400 − T200) ÷ 2 per 100 m. Enter both times in Race → Tests.",
+  },
+};
+
+const strength = (phase: Phase, min: number): Omit<PlannedSession, "id" | "date" | "uid"> => ({
   sport: "strength", title: phase === "build" || phase === "peak" ? "Maintenance strength" : "Strength & mobility", minutes: min, zone: 1, key: false, kind: "strength",
   description:
     phase === "build" || phase === "peak"
@@ -345,9 +381,11 @@ export interface PlanInputs {
   profile: Profile;
   t: Thresholds;
   currentWeeklyHours: number;
+  /** Days since the last swim (undefined = never swum / unknown). */
+  daysSinceSwim?: number;
 }
 
-export function generatePlan({ event, profile, t, currentWeeklyHours }: PlanInputs): Plan {
+export function generatePlan({ event, profile, t, currentWeeklyHours, daysSinceSwim }: PlanInputs): Plan {
   const spec = EVENTS[event.type];
   const warnings: string[] = [];
   const firstMonday = weekStart(event.trainingStart);
@@ -381,6 +419,18 @@ export function generatePlan({ event, profile, t, currentWeeklyHours }: PlanInpu
   }
 
   const cycle = age(profile) >= 50 ? 3 : 4; // 2:1 or 3:1 loading
+  // Returning to the pool after 3+ weeks off: ramp swim duration over 3-4 weeks before normal sessions
+  const swimGap = daysSinceSwim ?? 999;
+  const comebackWeeks = swimGap >= 56 ? 4 : swimGap >= 21 ? 3 : 0;
+  if (comebackWeeks && totalWeeks > 3) {
+    warnings.push(
+      daysSinceSwim == null
+        ? "No swims found in your history, so swimming starts with a 4-week technique-first comeback block."
+        : `Your last swim was ${daysSinceSwim} days ago, so swimming starts with a ${comebackWeeks}-week technique-first comeback block.`,
+    );
+  }
+  let lastTestWeek = -99;
+  let cssTested = false;
   const weeks: PlanWeek[] = [];
   let lastLoad = start;
   let loadIdx = 0;
@@ -417,9 +467,22 @@ export function generatePlan({ event, profile, t, currentWeeklyHours }: PlanInpu
       }
     }
     hours = Math.round(hours * 4) / 4;
+    // Fitness tests: in the 2nd week, then in recovery weeks at least 6 weeks apart (fresh legs, real numbers)
+    const testable = phase === "prep" || phase === "base" || phase === "build";
+    const testWeek = testable && i < phases.length - 3 && ((i === 1 && totalWeeks >= 8) || (recovery && i - lastTestWeek >= 6));
+    if (testWeek) lastTestWeek = i;
+    const comeback = totalWeeks > 3 && i < comebackWeeks ? i : -1;
+    const tests = new Set<"ftp" | "run" | "css">();
+    if (testWeek) {
+      tests.add("ftp").add("run");
+      if (comeback < 0) tests.add("css");
+    } else if (!cssTested && comebackWeeks && i === comebackWeeks && testable && totalWeeks > 6) {
+      tests.add("css"); // first real swim test right after the comeback block
+    }
+    if (tests.has("css")) cssTested = true;
     const sessions = phase === "race"
       ? raceWeek(ws, event, T, hours, spec)
-      : buildWeek(ws, phase, recovery, hours, event.type, i, T, profile.restDay, spec);
+      : buildWeek(ws, phase, recovery, hours, event.type, i, T, profile.restDay, spec, comeback, tests);
     const kept = sessions.filter((s) => s.date >= event.trainingStart);
     // A first week that starts mid-week only keeps the remaining days, so its target shrinks too
     const partial = kept.length < sessions.length && phase !== "race";
@@ -429,15 +492,45 @@ export function generatePlan({ event, profile, t, currentWeeklyHours }: PlanInpu
       phase,
       recovery,
       targetHours: partial ? Math.round((kept.reduce((m, s) => m + s.minutes, 0) / 60) * 4) / 4 : hours,
-      sessions: kept,
+      sessions: finishSessions(kept, T),
     });
   }
   return { event, spec, weeks, startHours: start, peakHours: peak, warnings };
 }
 
+/** Adds stable uids and treadmill speeds for run sessions. */
+function finishSessions(list: PlannedSession[], T: Targets): PlannedSession[] {
+  const seen = new Map<string, number>();
+  const rz = runZones(T.t.runPace);
+  const zonePace = (z: number): [number, number] => {
+    const zz = rz[z - 1];
+    const slow = zz.lo > 0 ? 1000 / zz.lo : T.t.runPace * 1.45;
+    const fast = zz.hi === Infinity ? T.t.runPace / 1.08 : 1000 / zz.hi;
+    return [fast, slow];
+  };
+  return list.map((s) => {
+    const base = `${s.date}|${s.sport}|${s.kind}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    const out: PlannedSession = { ...s, uid: n ? `${base}|${n}` : base };
+    if (s.sport === "run") {
+      if (s.title === "Hill repeats") out.treadmill = `Treadmill: 8×60 s at 6–8% incline, ${treadmillLine(...zonePace(4)).replace("Treadmill: ", "").replace(" at 1% incline", "")} effort; jog 2 min at 0–1% between`;
+      else if (/Race-pace|openers|Brick|Mini brick/i.test(s.title)) {
+        const rp = T.t.runPace / T.spec.runFrac;
+        out.treadmill = treadmillLine(rp - 5, rp + 5);
+      } else if (s.test === "run") out.treadmill = "Treadmill: set 1% incline and adjust speed by feel; note the average speed (km/h) at the end.";
+      else {
+        const z = s.title === "Threshold run" ? 4 : s.title === "Track intervals" ? 5 : s.title === "Aerobic + tempo" ? 3 : 2;
+        out.treadmill = treadmillLine(...zonePace(z)) + (z > 2 ? " for the hard blocks; easy parts at Z2 speed" : "");
+      }
+    }
+    return out;
+  });
+}
+
 function buildWeek(
   ws: string, phase: Phase, recovery: boolean, hours: number, type: EventType, wk: number,
-  T: Targets, restDay: number, spec: EventSpec,
+  T: Targets, restDay: number, spec: EventSpec, comeback = -1, tests = new Set<"ftp" | "run" | "css">(),
 ): PlannedSession[] {
   const total = hours * 60;
   const strengthCount = phase === "prep" || phase === "base" ? 2 : phase === "build" ? 1 : 0;
@@ -449,28 +542,31 @@ function buildWeek(
   if (phase === "prep") swim *= 1.1;
 
   const day = (k: number) => addDays(ws, (restDay + k) % 7);
-  const out: Omit<PlannedSession, "id">[] = [];
-  const add = (k: number, s: Omit<PlannedSession, "id" | "date">) => {
+  const out: Omit<PlannedSession, "id" | "uid">[] = [];
+  const add = (k: number, s: Omit<PlannedSession, "id" | "date" | "uid">) => {
     if (s.minutes >= 15 || s.sport === "rest") out.push({ ...s, minutes: r5(s.minutes), date: day(k) });
   };
 
   // Swim: 2 or 3 sessions
   const nSwim = swim >= 150 ? 3 : 2;
   const swimEach = swim / nSwim;
-  add(2, swimMain(phase, T, swimEach));
-  add(4, swimEndurance(phase, T, swimEach));
-  if (nSwim === 3) add(6, { ...swimEndurance(phase, T, swimEach), title: "Recovery swim", description: "Easy swimming with drills and pull buoy. Loosen up after the long day." });
+  if (comeback >= 0) {
+    add(2, swimComeback(comeback, swimEach, false));
+    add(4, swimComeback(comeback, swimEach, true));
+  } else {
+    add(2, tests.has("css") ? TEST_SESSIONS.css : swimMain(phase, T, swimEach));
+    add(4, swimEndurance(phase, T, swimEach));
+    if (nSwim === 3) add(6, { ...swimEndurance(phase, T, swimEach), title: "Recovery swim", description: "Easy swimming with drills and pull buoy. Loosen up after the long day." });
+  }
 
   // Bike
   const bikeHasEasy = bike >= 200;
   const longB = Math.min(spec.longBikeMax, bike * (bikeHasEasy ? 0.5 : 0.6));
   const qualB = Math.min(120, bikeHasEasy ? bike * 0.28 : bike - longB);
   const easyB = bikeHasEasy ? bike - longB - qualB : 0;
-  if (recovery) {
-    add(1, { ...easyBike(T, qualB), title: "Easy ride (recovery week)" });
-  } else {
-    add(1, bikeQuality(phase, type, wk, T, qualB));
-  }
+  if (tests.has("ftp")) add(1, TEST_SESSIONS.ftp);
+  else if (recovery) add(1, { ...easyBike(T, qualB), title: "Easy ride (recovery week)" });
+  else add(1, bikeQuality(phase, type, wk, T, qualB));
   if (easyB > 0) add(4, easyBike(T, Math.min(easyB, 120)));
   add(5, longBike(recovery ? "prep" : phase, type, T, longB));
 
@@ -484,11 +580,9 @@ function buildWeek(
     longR = Math.min(longR, spec.longRunMax);
     easyR = 0;
   }
-  if (recovery) {
-    add(3, { ...easyRun(T, qualR), title: "Easy run + strides", description: easyRun(T, qualR).description + " Add 4×20 s strides." });
-  } else {
-    add(3, runQuality(phase, type, wk, T, qualR));
-  }
+  if (tests.has("run")) add(3, TEST_SESSIONS.run);
+  else if (recovery) add(3, { ...easyRun(T, qualR), title: "Easy run + strides", description: easyRun(T, qualR).description + " Add 4×20 s strides." });
+  else add(3, runQuality(phase, type, wk, T, qualR));
   if (easyR > 0) add(2, easyRun(T, easyR));
   if (brick) add(5, brickRun(T, brick));
   add(6, longRun(recovery ? "base" : phase, T, longR));
@@ -498,9 +592,20 @@ function buildWeek(
 
   add(0, { sport: "rest", title: "Rest day", minutes: 0, zone: 0, key: false, kind: "rest", description: "Full rest or 15 min mobility. Sleep 8 h+." });
 
+  // Tests have a fixed length: shorten the other sessions so the week still matches its target
+  const testMin = out.filter((x) => x.kind === "test").reduce((m, x) => m + x.minutes, 0);
+  const others = out.filter((x) => x.kind !== "test" && x.sport !== "rest");
+  const otherMin = others.reduce((m, x) => m + x.minutes, 0);
+  const budget = Math.max(0, total - testMin);
+  if (testMin && otherMin > budget) {
+    const f = budget / otherMin;
+    for (const x of others) x.minutes = r5(x.minutes * f);
+    for (let i = out.length - 1; i >= 0; i--) if (out[i].kind !== "test" && out[i].sport !== "rest" && out[i].minutes < 15) out.splice(i, 1);
+  }
+
   return out
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-    .map((s, i) => ({ ...s, id: `${s.date}-${i}` }));
+    .map((s, i) => ({ ...s, id: `${s.date}-${i}`, uid: "" }));
 }
 
 function raceWeek(ws: string, event: RaceEvent, T: Targets, hours: number, spec: EventSpec): PlannedSession[] {
@@ -509,7 +614,7 @@ function raceWeek(ws: string, event: RaceEvent, T: Targets, hours: number, spec:
   for (let k = 0; k < 7; k++) {
     const date = addDays(ws, k);
     const before = daysBetween(date, event.date);
-    const push = (s: Omit<PlannedSession, "id" | "date">) => out.push({ ...s, date, id: `${date}-${out.length}` });
+    const push = (s: Omit<PlannedSession, "id" | "date" | "uid">) => out.push({ ...s, date, id: `${date}-${out.length}`, uid: "" });
     if (before < 0) {
       push({ sport: "rest", title: "Recovery", minutes: 0, zone: 0, key: false, kind: "rest", description: "Post-race recovery: walk, eat, sleep. No structured training for 5–10 days." });
     } else if (before === 0) {

@@ -5,7 +5,10 @@ import { coachAdvice, compliance, macroTargets, matchSession, sumMacros } from "
 import { sessionsOn, weekOf, predictRace, PHASE_META } from "../lib/plan";
 import { ctlLevel } from "../lib/metrics";
 import { addDays, daysBetween, fmtDate, fmtDuration, fmtHours, fmtPace, round, SPORT_META, weekStart, ymd } from "../lib/format";
-import { Card, MacroRing, SessionCard, Stat } from "../components/ui";
+import { Card, MacroRing, Stat } from "../components/ui";
+import { CheckinCard } from "../components/Checkin";
+import { readiness } from "../lib/readiness";
+import { SessionCard } from "../components/SessionCard";
 import { FitnessChart, WeeklyVolumeChart } from "../components/charts";
 
 const ICONS = { good: "✅", caution: "⚠️", warn: "🛑", info: "💡" };
@@ -18,7 +21,15 @@ export function Today({ d, go }: { d: Derived; go: (r: string) => void }) {
   const { plan, load, t, fitness } = d;
   const [open, setOpen] = useState<string | null>(null);
 
-  const coach = useMemo(() => coachAdvice({ plan, acts, load, profile }), [plan, acts, load, profile]);
+  const checkins = useApp((s) => s.checkins);
+  const ready = useMemo(() => {
+    const last = load[load.length - 1];
+    return readiness(checkins[today], checkins, last ? last.ctl - last.atl : undefined);
+  }, [checkins, today, load]);
+  const coach = useMemo(
+    () => coachAdvice({ plan, acts, load, profile, daysSinceSwim: d.daysSinceSwim, readiness: ready }),
+    [plan, acts, load, profile, d.daysSinceSwim, ready],
+  );
   const todays = sessionsOn(plan, today);
   const week = weekOf(plan, today);
   const last = load[load.length - 1];
@@ -95,6 +106,8 @@ export function Today({ d, go }: { d: Derived; go: (r: string) => void }) {
         </Card>
       )}
 
+      <CheckinCard r={ready} />
+
       <div className="grid two">
         <Card title="Coach">
           {coach.advice.map((a, i) => (
@@ -118,12 +131,13 @@ export function Today({ d, go }: { d: Derived; go: (r: string) => void }) {
             {todays.length === 0 && <div className="muted small">Nothing planned today.</div>}
             {todays.map((s) => (
               <SessionCard
-                key={s.id}
+                raceIf={plan?.spec.bikeIf}
+                key={s.uid}
                 s={s}
                 done={matchSession(s, acts)}
                 scale={coach.todayScale}
-                expanded={open === s.id}
-                onToggle={() => setOpen(open === s.id ? null : s.id)}
+                expanded={open === s.uid}
+                onToggle={() => setOpen(open === s.uid ? null : s.uid)}
               />
             ))}
             {todaysActs.filter((a) => !todays.some((s) => matchSession(s, [a]))).map((a) => (

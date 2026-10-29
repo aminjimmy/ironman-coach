@@ -4,6 +4,7 @@ import { age } from "./metrics";
 import type { Plan, PlannedSession } from "./plan";
 import { sessionsOn, weekOf } from "./plan";
 import { addDays, round, ymd } from "./format";
+import { countsAsPlanned } from "./overrides";
 
 export interface Advice {
   tone: "good" | "caution" | "warn" | "info";
@@ -19,17 +20,24 @@ export interface Compliance {
 
 export function compliance(plan: Plan | undefined, acts: Activity[], from: string, to: string): Compliance {
   let plannedMin = 0;
+  let markedDoneMin = 0;
+  const inRange = acts.filter((a) => ymd(a.start) >= from && ymd(a.start) <= to);
   if (plan) {
     for (const w of plan.weeks)
-      for (const s of w.sessions) if (s.date >= from && s.date <= to && s.kind !== "race") plannedMin += s.minutes;
+      for (const s of w.sessions) {
+        if (s.date < from || s.date > to || !countsAsPlanned(s)) continue;
+        plannedMin += s.minutes;
+        // ticked "done" without a recorded workout (e.g. swim without a watch): credit the planned time
+        if (s.status === "done" && !matchSession({ ...s, status: undefined }, inRange)) markedDoneMin += s.minutes;
+      }
   }
-  const doneMin = acts.filter((a) => ymd(a.start) >= from && ymd(a.start) <= to).reduce((m, a) => m + a.movingTime / 60, 0);
+  const doneMin = inRange.reduce((m, a) => m + a.movingTime / 60, 0) + markedDoneMin;
   return { plannedMin, doneMin, pct: plannedMin ? (doneMin / plannedMin) * 100 : 0 };
 }
 
 /** Does an actual activity on that date satisfy the planned session? */
 export function matchSession(s: PlannedSession, acts: Activity[]): Activity | undefined {
-  if (s.sport === "rest") return undefined;
+  if (s.sport === "rest" || s.status === "skipped") return undefined;
   return acts.find((a) => ymd(a.start) === s.date && (a.sport === s.sport || (s.kind === "race" && a.sport !== "strength")));
 }
 
@@ -49,8 +57,10 @@ export function coachAdvice(opts: {
   load: LoadDay[];
   profile: Profile;
   today?: string;
+  daysSinceSwim?: number;
+  readiness?: { score: number; ill?: boolean; notes: string[] };
 }): { advice: Advice[]; suggestedNextWeekHours?: number; todayScale: number } {
-  const { plan, acts, load, profile } = opts;
+  const { plan, acts, load, profile, readiness } = opts;
   const today = opts.today ?? ymd();
   const advice: Advice[] = [];
   const last = load[load.length - 1];
@@ -63,6 +73,31 @@ export function coachAdvice(opts: {
   const todays = sessionsOn(plan, today).filter((s) => s.sport !== "rest");
   const keyToday = todays.find((s) => s.key);
   let todayScale = 1;
+
+  if (readiness?.ill) {
+    todayScale = 0;
+    advice.push({
+      tone: "warn",
+      headline: "Feeling ill: rest today",
+      detail: "Skip training until symptoms are gone. Use Plan → Sick / travel so the plan eases you back in afterwards.",
+    });
+  } else if (readiness && readiness.score < 40) {
+    todayScale = Math.min(todayScale, 0.6);
+    advice.push({
+      tone: "warn",
+      headline: `Low readiness (${readiness.score}/100): go easy`,
+      detail: `${readiness.notes.join(" ")} Swap today's key session for 30–45 min Z1–2 or rest.`,
+    });
+  } else if (readiness && readiness.score < 60) {
+    todayScale = Math.min(todayScale, 0.85);
+    advice.push({
+      tone: "caution",
+      headline: `Readiness ${readiness.score}/100: trim today`,
+      detail: `${readiness.notes.join(" ")} Do the session but cut 15% of the volume and cap intensity at the bottom of the target range.`,
+    });
+  } else if (readiness) {
+    advice.push({ tone: "good", headline: `Readiness ${readiness.score}/100`, detail: readiness.notes.length ? readiness.notes.join(" ") : "Sleep, energy and soreness all look good." });
+  }
 
   if (!acts.length) {
     advice.push({
@@ -125,6 +160,27 @@ export function coachAdvice(opts: {
         detail: "Extra volume is only useful if you absorb it. Keep easy days truly easy.",
       });
     }
+  }
+
+  // Key sessions skipped in the last 7 days
+  if (plan) {
+    const skippedKeys = plan.weeks.flatMap((w) => w.sessions).filter((s) => s.key && s.status === "skipped" && !s.disrupted && s.date >= addDays(today, -7) && s.date < today);
+    if (skippedKeys.length >= 2) {
+      advice.push({
+        tone: "caution",
+        headline: `${skippedKeys.length} key sessions skipped this past week`,
+        detail: `${skippedKeys.map((s) => s.title).join(", ")}. If time is the issue, shorten easy sessions instead and protect the long ride, long run and one quality session.`,
+      });
+    }
+  }
+
+  // Swimming gap
+  if (plan && opts.daysSinceSwim != null && opts.daysSinceSwim >= 14) {
+    advice.push({
+      tone: opts.daysSinceSwim >= 42 ? "caution" : "info",
+      headline: `No swim logged for ${opts.daysSinceSwim} days`,
+      detail: "Swim fitness and feel for the water fade fastest. Short, frequent sessions beat one long one; the comeback block in your plan starts at 25 min. Swimming without a watch? Tick the session done or log it manually.",
+    });
   }
 
   // Discipline balance over 4 weeks (independent of sport mix asked by user: volume based)
@@ -203,12 +259,12 @@ export function trainingKcal(acts: Activity[], planned: PlannedSession[], profil
   return { kcal: Math.round(kcal), hours: min / 60 };
 }
 
-export function macroTargets(p: Profile, acts: Activity[], planned: PlannedSession[]): MacroTargets {
+export function macroTargets(p: Profile, acts: Activity[], planned: PlannedSession[], carbLoadGPerKg?: number): MacroTargets {
   const b = bmr(p);
   const { kcal: tk, hours } = trainingKcal(acts, planned, p);
-  const carbsPerKg = hours < 0.75 ? 4 : hours < 1.5 ? 5.5 : hours < 2.5 ? 7 : hours < 4 ? 8.5 : 10;
+  const carbsPerKg = carbLoadGPerKg ?? (hours < 0.75 ? 4 : hours < 1.5 ? 5.5 : hours < 2.5 ? 7 : hours < 4 ? 8.5 : 10);
   const adj = p.nutritionGoal === "lose" ? -350 : p.nutritionGoal === "gain" ? 300 : 0;
-  const calories = Math.round(b * 1.35 + tk + adj);
+  const calories = Math.round(Math.max(b * 1.35 + tk + adj, carbLoadGPerKg ? p.weightKg * carbLoadGPerKg * 4 + p.weightKg * 1.6 * 4 + p.weightKg * 0.8 * 9 : 0));
   const protein = Math.round(p.weightKg * (p.nutritionGoal === "lose" ? 2.0 : 1.8));
   let carbs = Math.round(p.weightKg * carbsPerKg);
   let fat = Math.round((calories - protein * 4 - carbs * 4) / 9);

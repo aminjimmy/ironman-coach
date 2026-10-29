@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "./lib/store";
 import { useDerived } from "./lib/useDerived";
 import { handleOAuthRedirect, isSyncing, syncStrava } from "./lib/sync";
@@ -9,6 +9,9 @@ import { Workouts, WorkoutDetail } from "./pages/Workouts";
 import { Fuel } from "./pages/Fuel";
 import { Me, ProfileForm, EventForm, DEFAULT_PROFILE } from "./pages/Me";
 import { Settings } from "./pages/Settings";
+import { Race } from "./pages/Race";
+import { cloudEnabled, setIcsProvider, startAutoCloudSync, syncCloud } from "./lib/cloud";
+import { planToIcs } from "./lib/calendar";
 import { ToastHost, Spinner, toast } from "./components/ui";
 
 const TABS = [
@@ -16,6 +19,7 @@ const TABS = [
   { id: "plan", label: "Plan", ico: "📅" },
   { id: "workouts", label: "Workouts", ico: "⏱️" },
   { id: "fuel", label: "Fuel", ico: "🍽️" },
+  { id: "race", label: "Race", ico: "🏁" },
   { id: "me", label: "Me", ico: "👤" },
 ];
 
@@ -39,6 +43,12 @@ export default function App() {
   const events = useApp((s) => s.events);
   const [route, go] = useHashRoute();
   const d = useDerived();
+  // the cloud backup publishes the current plan as a subscribable calendar
+  const planRef = useRef(d?.plan);
+  planRef.current = d?.plan;
+  useEffect(() => {
+    setIcsProvider(() => (planRef.current ? planToIcs(planRef.current, useApp.getState().profile?.trainingTime) : undefined));
+  }, []);
 
   // Strava OAuth return + auto-sync on open / when the app comes back to the foreground
   useEffect(() => {
@@ -52,6 +62,12 @@ export default function App() {
       syncStrava().then((n) => n && toast(`Synced ${n} new activit${n === 1 ? "y" : "ies"}`)).catch(() => {});
     };
 
+    let lastCloud = 0;
+    const cloud = () => {
+      if (!cloudEnabled() || Date.now() - lastCloud < 2 * 60_000) return;
+      lastCloud = Date.now();
+      syncCloud().then((m) => m.startsWith("Synced") && toast(m)).catch(() => {});
+    };
     handleOAuthRedirect()
       .then((msg) => {
         if (!msg) return autoSync();
@@ -59,7 +75,11 @@ export default function App() {
         return syncStrava({ full: true }).then((n) => toast(`Synced ${n} activities from Strava`));
       })
       .catch((e) => toast((e as Error).message))
-      .finally(() => (busy = false));
+      .finally(() => {
+        busy = false;
+        cloud();
+      });
+    const stopAuto = startAutoCloudSync();
 
     const onVisible = async () => {
       if (document.visibilityState !== "visible" || busy || isSyncing()) return;
@@ -72,9 +92,13 @@ export default function App() {
         busy = false;
       }
       autoSync();
+      cloud();
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      stopAuto();
+    };
   }, [hydrated]);
 
   if (!hydrated) return <div style={{ display: "grid", placeItems: "center", height: "100dvh" }}><Spinner /></div>;
@@ -88,6 +112,7 @@ export default function App() {
   else if (tab === "workouts") page = <Workouts d={d} go={go} />;
   else if (tab === "fuel") page = <Fuel d={d} go={go} />;
   else if (tab === "me") page = <Me d={d} go={go} />;
+  else if (tab === "race") page = <Race d={d} go={go} />;
   else if (tab === "settings") page = <Settings go={go} />;
   else page = <Today d={d} go={go} />;
 

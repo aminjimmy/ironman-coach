@@ -7,7 +7,8 @@ import { analyze } from "../lib/insights";
 import { loadStreams, syncStrava } from "../lib/sync";
 import { importFile } from "../lib/fileImport";
 import { fmtDistance, fmtDuration, fmtHours, fmtPace, fmtSpeedForSport, round, SPORT_META, weekStart, fmtDate } from "../lib/format";
-import { Card, Spinner, Stat, ZoneBars, toast } from "../components/ui";
+import { Card, Sheet, Spinner, Stat, ZoneBars, toast } from "../components/ui";
+import { ManualWorkoutForm } from "../components/ManualWorkout";
 import { SeriesChart } from "../components/charts";
 
 export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
@@ -18,6 +19,7 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
   const syncError = useApp((s) => s.settings.lastSyncError);
   const [filter, setFilter] = useState<Sport | "all">("all");
   const [busy, setBusy] = useState(false);
+  const [logging, setLogging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const shown = acts.filter((a) => filter === "all" || a.sport === filter);
@@ -72,6 +74,7 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
         </div>
         <div className="row">
           {busy && <Spinner />}
+          <button className="btn sm" onClick={() => setLogging(true)}>+ Log</button>
           <button className="btn sm" onClick={() => fileRef.current?.click()} disabled={busy}>Import</button>
           {strava ? (
             <button className="btn strava sm" onClick={sync} disabled={busy}>Sync</button>
@@ -81,6 +84,12 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
           <input ref={fileRef} type="file" accept=".fit,.gpx,.tcx" multiple hidden onChange={(e) => onFiles(e.target.files)} />
         </div>
       </div>
+
+      {logging && (
+        <Sheet onClose={() => setLogging(false)}>
+          <ManualWorkoutForm onDone={(a) => { setLogging(false); if (a) go(`workouts/${a.id}`); }} />
+        </Sheet>
+      )}
 
       {syncError && (
         <div className="card small" role="alert" style={{ borderColor: "var(--bad)", color: "var(--text-2)" }}>
@@ -115,7 +124,11 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
                   <button key={a.id} className="list-item" onClick={() => go(`workouts/${a.id}`)}>
                     <span className="ic" style={{ background: `${SPORT_META[a.sport].color}26` }}>{SPORT_META[a.sport].icon}</span>
                     <div className="grow">
-                      <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
+                      <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {d.t.flags.has(a.id) && !a.includeAnyway && <span title="Data looks implausible" aria-label="data warning">⚠️ </span>}
+                        {a.excluded && <span title="Excluded from estimates" aria-label="excluded">🚫 </span>}
+                        {a.name}
+                      </div>
                       <div className="small muted">
                         {new Date(a.start).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} · {fmtDuration(a.movingTime)}
                         {a.distance > 0 && ` · ${fmtDistance(a.distance, a.sport)}`}
@@ -139,6 +152,8 @@ export function Workouts({ d, go }: { d: Derived; go: (r: string) => void }) {
 export function WorkoutDetail({ id, d, go }: { id: string; d: Derived; go: (r: string) => void }) {
   const a = useApp((s) => s.activities.find((x) => x.id === id));
   const deleteActivity = useApp((s) => s.deleteActivity);
+  const patchActivity = useApp((s) => s.patchActivity);
+  const [editing, setEditing] = useState(false);
   const profile = useApp((s) => s.profile)!;
   const [streams, setStreams] = useState<Streams | undefined>();
   const [loading, setLoading] = useState(true);
@@ -215,6 +230,27 @@ export function WorkoutDetail({ id, d, go }: { id: string; d: Derived; go: (r: s
         </Card>
       </div>
 
+      <Card title="Data quality">
+        {d.t.flags.has(a.id) && (
+          <div className="small" role="alert" style={{ color: a.includeAnyway ? "var(--text-2)" : "var(--warn)", marginBottom: 8 }}>
+            ⚠️ {d.t.flags.get(a.id)}{" "}
+            {a.includeAnyway ? "You've marked it as trusted." : "It still counts as training load (from effort or heart rate) but isn't used to estimate your zones."}
+          </div>
+        )}
+        <div className="stack" style={{ gap: 8 }}>
+          {d.t.flags.has(a.id) && (
+            <label className="row small">
+              <input type="checkbox" checked={!!a.includeAnyway} onChange={(e) => patchActivity(a.id, { includeAnyway: e.target.checked })} style={{ width: 20, minHeight: 20 }} />
+              Trust this data (the numbers are correct)
+            </label>
+          )}
+          <label className="row small">
+            <input type="checkbox" checked={!a.excluded} onChange={(e) => patchActivity(a.id, { excluded: !e.target.checked })} style={{ width: 20, minHeight: 20 }} />
+            Use this workout to estimate thresholds &amp; VO₂max
+          </label>
+        </div>
+      </Card>
+
       {loading && <div className="row muted"><Spinner /> Loading detailed streams…</div>}
       {err && <div className="small" style={{ color: "var(--warn)" }}>Couldn't load detailed data: {err}. Summary metrics are still shown.</div>}
 
@@ -263,6 +299,7 @@ export function WorkoutDetail({ id, d, go }: { id: string; d: Derived; go: (r: s
       )}
 
       <div className="row">
+        {a.source === "manual" && <button className="btn sm" onClick={() => setEditing(true)}>Edit</button>}
         {a.source === "strava" && (
           <a className="btn sm" href={`https://www.strava.com/activities/${a.id.replace("strava-", "")}`} target="_blank" rel="noreferrer">View on Strava</a>
         )}
@@ -278,7 +315,13 @@ export function WorkoutDetail({ id, d, go }: { id: string; d: Derived; go: (r: s
           Remove
         </button>
       </div>
-      <p className="tiny muted">Metrics computed in-app from {a.source === "strava" ? "Strava" : a.source === "file" ? "the imported file" : "demo data"} using your thresholds (FTP {d.t.ftp} W, LTHR {d.t.lthr} bpm, run threshold {fmtPace(d.t.runPace)}/km, CSS {fmtPace(d.t.swimCss)}/100m). Profile weight {profile.weightKg} kg.</p>
+      {editing && (
+        <Sheet onClose={() => setEditing(false)}>
+          <ManualWorkoutForm initial={a} onDone={() => setEditing(false)} />
+        </Sheet>
+      )}
+      {a.notes && <Card title="Notes"><div className="small" style={{ whiteSpace: "pre-wrap" }}>{a.notes}</div></Card>}
+      <p className="tiny muted">Metrics computed in-app from {a.source === "strava" ? "Strava" : a.source === "file" ? "the imported file" : a.source === "manual" ? "your manual entry" : "demo data"} using your thresholds (FTP {d.t.ftp} W, LTHR {d.t.lthr} bpm, run threshold {fmtPace(d.t.runPace)}/km, CSS {fmtPace(d.t.swimCss)}/100m). Profile weight {profile.weightKg} kg.</p>
     </div>
   );
 }

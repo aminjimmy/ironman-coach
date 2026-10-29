@@ -4,10 +4,16 @@ import type { Derived } from "../lib/useDerived";
 import { PHASE_META, type Phase } from "../lib/plan";
 import { compliance, matchSession } from "../lib/coach";
 import { addDays, DAY_NAMES_LONG, dayIndex, fmtDate, fmtHours, SPORT_META, ymd } from "../lib/format";
-import { Card, SessionCard } from "../components/ui";
+import { Card, Sheet } from "../components/ui";
+import { SessionCard } from "../components/SessionCard";
+import { DisruptionManager } from "../components/Disruptions";
+import { planToIcs } from "../lib/calendar";
+import { shareOrDownload } from "../lib/workouts";
 
 export function PlanPage({ d, go }: { d: Derived; go: (r: string) => void }) {
   const acts = useApp((s) => s.activities);
+  const trainingTime = useApp((s) => s.profile?.trainingTime);
+  const [disruptSheet, setDisruptSheet] = useState(false);
   const plan = d.plan;
   const today = ymd();
   const current = plan?.weeks.find((w) => today >= w.start && today < addDays(w.start, 7));
@@ -50,6 +56,21 @@ export function PlanPage({ d, go }: { d: Derived; go: (r: string) => void }) {
           <div className="sub">{plan.event.name || plan.spec.label} · {plan.weeks.length} weeks · {plan.startHours.toFixed(1)} → {plan.peakHours.toFixed(1)} h/week</div>
         </div>
       </div>
+      <div className="row">
+        <button className="btn sm" onClick={() => setDisruptSheet(true)}>🤒 Sick / ✈️ travel</button>
+        <button
+          className="btn sm"
+          onClick={() => shareOrDownload("training-plan.ics", planToIcs(plan, trainingTime), "text/calendar")}
+          title="Add upcoming sessions to Google Calendar with reminders"
+        >
+          📆 Add to calendar
+        </button>
+      </div>
+      {disruptSheet && (
+        <Sheet onClose={() => setDisruptSheet(false)}>
+          <DisruptionManager onDone={() => setDisruptSheet(false)} />
+        </Sheet>
+      )}
 
       <Card>
         <div className="phase-strip" role="img" aria-label="Plan phases">
@@ -110,11 +131,12 @@ export function PlanPage({ d, go }: { d: Derived; go: (r: string) => void }) {
                     <div className="day-label">{DAY_NAMES_LONG[dayIndex(day)]} {fmtDate(day)}{day === today ? " · today" : ""}</div>
                     {w.sessions.filter((s) => s.date === day).map((s) => (
                       <SessionCard
-                        key={s.id}
+                        key={s.uid}
                         s={s}
+                        raceIf={plan.spec.bikeIf}
                         done={matchSession(s, acts)}
-                        expanded={openSession === s.id}
-                        onToggle={() => setOpenSession(openSession === s.id ? null : s.id)}
+                        expanded={openSession === s.uid}
+                        onToggle={() => setOpenSession(openSession === s.uid ? null : s.uid)}
                       />
                     ))}
                   </div>

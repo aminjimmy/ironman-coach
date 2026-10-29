@@ -18,6 +18,8 @@ export interface Profile {
   experience: Experience;
   restDay: number; // 0 = Monday ... 6 = Sunday
   nutritionGoal: "maintain" | "lose" | "gain";
+  trainingTime?: string; // "HH:MM" usual session start, for calendar export
+  updatedAt?: number;
 }
 
 export interface WeightEntry {
@@ -33,11 +35,12 @@ export interface RaceEvent {
   type: EventType;
   date: string; // YYYY-MM-DD
   trainingStart: string; // YYYY-MM-DD
+  updatedAt?: number;
 }
 
 export interface Activity {
   id: string;
-  source: "strava" | "file" | "demo";
+  source: "strava" | "file" | "demo" | "manual";
   sport: Sport;
   rawType: string;
   name: string;
@@ -57,6 +60,11 @@ export interface Activity {
   kilojoules?: number;
   calories?: number;
   hasStreams?: boolean;
+  rpe?: number; // 1-10 perceived effort (manual entries)
+  notes?: string;
+  excluded?: boolean; // user: keep out of threshold/fitness estimates
+  includeAnyway?: boolean; // user: trust data the quality filter flagged
+  updatedAt?: number;
 }
 
 export interface Streams {
@@ -92,6 +100,67 @@ export interface FoodEntry {
   photo?: string; // small data URL thumbnail
   confidence?: "low" | "medium" | "high";
   notes?: string;
+  updatedAt?: number;
+}
+
+export interface FoodTemplate {
+  id: string;
+  title: string;
+  items: FoodItem[];
+  meal?: FoodEntry["meal"];
+}
+
+/** Keyed by sessionKey(): stable across plan regeneration as long as the session itself is unchanged. */
+export interface SessionMark {
+  status?: "done" | "skipped";
+  movedTo?: string; // YYYY-MM-DD
+  updatedAt: number;
+}
+
+export interface Disruption {
+  id: string;
+  type: "sick" | "travel";
+  from: string;
+  to: string;
+  note?: string;
+  updatedAt?: number;
+}
+
+export interface Checkin {
+  date: string;
+  sleepHours: number;
+  sleepQuality: number; // 1-5
+  soreness: number; // 1-5 (5 = very sore)
+  energy: number; // 1-5
+  stress: number; // 1-5 (5 = very stressed)
+  restingHr?: number;
+  hrv?: number;
+  ill?: boolean;
+  updatedAt: number;
+}
+
+export interface SweatTest {
+  id: string;
+  date: string;
+  sport: Sport;
+  minutes: number;
+  preKg: number;
+  postKg: number;
+  drankMl: number;
+  urineMl: number;
+  tempC?: number;
+  humidity?: number;
+  updatedAt?: number;
+}
+
+export interface RacePrefs {
+  tempC: number;
+  humidity: number;
+  carbsPerHour: number;
+  gelCarbs: number;
+  drinkCarbsPer500: number;
+  sodiumMgPerL: number;
+  caffeine: boolean;
 }
 
 export interface StravaAuth {
@@ -111,4 +180,10 @@ export interface Settings {
   lastSyncCount?: number;
   lastSyncError?: string;
   stravaScope?: string; // scopes the athlete actually granted
+  githubToken?: string;
+  cloudPassphrase?: string;
+  gistId?: string;
+  gistOwner?: string;
+  lastCloudSync?: number;
+  cloudError?: string;
 }

@@ -1,5 +1,6 @@
 import type { Activity, Profile, Sport, Streams } from "./types";
 import { addDays, clamp, daysBetween, fmtPace, round, ymd } from "./format";
+import { qualityFlags, usableForEstimates } from "./quality";
 
 // ---------- Thresholds ----------
 
@@ -11,6 +12,8 @@ export interface Thresholds {
   runPace: number; // s/km at threshold
   swimCss: number; // s/100m
   estimated: { maxHr: boolean; lthr: boolean; ftp: boolean; runPace: boolean; swimCss: boolean };
+  /** activity id -> reason, for workouts with implausible data (see quality.ts) */
+  flags: Map<string, string>;
 }
 
 export function age(p: Profile): number {
@@ -52,17 +55,21 @@ export function estimateRunPace(acts: Activity[]): number | undefined {
 }
 
 export function estimateCss(acts: Activity[]): number | undefined {
-  let bestSpeed = 0;
-  for (const a of recent(acts, "swim")) {
-    if (!a.avgSpeed || a.distance < 400) continue;
-    bestSpeed = Math.max(bestSpeed, a.avgSpeed / 0.92);
-  }
-  return bestSpeed ? Math.round((100 / bestSpeed) * 1.03) : undefined;
+  // Swim averages include wall rests and watch quirks, so use a high percentile rather than the single best
+  const speeds = recent(acts, "swim", 180)
+    .filter((a) => a.avgSpeed && a.distance >= 400)
+    .map((a) => a.avgSpeed! / 0.92)
+    .sort((a, b) => a - b);
+  if (!speeds.length) return undefined;
+  const v = speeds[Math.min(speeds.length - 1, Math.floor(speeds.length * 0.8))];
+  return Math.round((100 / v) * 1.03);
 }
 
-export function thresholds(p: Profile, acts: Activity[]): Thresholds {
+export function thresholds(p: Profile, allActs: Activity[]): Thresholds {
   const a = age(p);
-  const observedMax = Math.max(0, ...acts.map((x) => x.maxHr ?? 0));
+  const flags = qualityFlags(allActs);
+  const acts = allActs.filter((x) => usableForEstimates(x, flags));
+  const observedMax = Math.max(0, ...acts.map((x) => (x.maxHr && x.maxHr < 225 ? x.maxHr : 0)));
   const maxHr = p.maxHr ?? (observedMax > 150 ? observedMax : Math.round(208 - 0.7 * a));
   const lthr = p.lthr ?? Math.round(maxHr * 0.9);
   const fallbackFtp = Math.round(p.weightKg * { beginner: 2.2, intermediate: 2.8, advanced: 3.5 }[p.experience]);
@@ -85,8 +92,12 @@ export function thresholds(p: Profile, acts: Activity[]): Thresholds {
       runPace: !p.runThresholdPace,
       swimCss: !p.swimCss,
     },
+    flags,
   };
 }
+
+/** Activities that may feed estimates (VO2max, thresholds), given the thresholds' quality flags. */
+export const usable = (acts: Activity[], t: Thresholds) => acts.filter((a) => usableForEstimates(a, t.flags));
 
 // ---------- Zones ----------
 
@@ -235,11 +246,13 @@ export function decoupling(s: Streams, sport: Sport): number | undefined {
 export interface Stress {
   tss: number;
   intensity: number; // IF
-  method: "power" | "pace" | "hr" | "duration";
+  method: "power" | "pace" | "rpe" | "hr" | "duration";
 }
 
 export function activityStress(a: Activity, t: Thresholds, s?: Streams): Stress {
   const hours = a.movingTime / 3600;
+  const trusted = !t.flags.has(a.id) || !!a.includeAnyway;
+  if (!trusted) return fallbackStress(a, t, hours);
   if (a.sport === "bike") {
     let np = a.weightedWatts ?? (a.avgWatts && a.deviceWatts !== false ? a.avgWatts * 1.05 : undefined);
     if (s?.watts && s.watts.some((w) => w > 0)) np = normalizedPower(s.time, s.watts);
@@ -258,7 +271,16 @@ export function activityStress(a: Activity, t: Thresholds, s?: Streams): Stress 
     const IF = clamp(a.avgSpeed / (100 / t.swimCss), 0.3, 1.2);
     return { tss: hours * IF ** 3 * 100, intensity: IF, method: "pace" };
   }
-  if (a.avgHr) {
+  return fallbackStress(a, t, hours);
+}
+
+/** Effort-based stress when power/pace can't be used: perceived effort, then heart rate, then duration. */
+function fallbackStress(a: Activity, t: Thresholds, hours: number): Stress {
+  if (a.rpe) {
+    const IF = clamp(0.5 + a.rpe * 0.05, 0.5, 1.05);
+    return { tss: hours * IF * IF * 100, intensity: IF, method: "rpe" };
+  }
+  if (a.avgHr && a.avgHr >= 40 && a.avgHr <= 215) {
     const IF = clamp(a.avgHr / t.lthr, 0.4, 1.15);
     return { tss: hours * IF * IF * 100, intensity: IF, method: "hr" };
   }
@@ -362,7 +384,7 @@ export function vo2Category(vo2: number, sex: "male" | "female", ageYears: numbe
 }
 
 export function fitnessEstimate(p: Profile, acts: Activity[], t: Thresholds): FitnessEstimate {
-  const ests = recent(acts, "run", 60)
+  const ests = recent(usable(acts, t), "run", 60)
     .map((a) => runVo2(a, t))
     .filter((x): x is number => !!x)
     .sort((a, b) => a - b);
@@ -372,7 +394,7 @@ export function fitnessEstimate(p: Profile, acts: Activity[], t: Thresholds): Fi
     // upper-middle of the distribution: easy runs with cardiac drift under-read
     vo2 = ests[Math.floor(ests.length * 0.7)];
     source = "run";
-  } else if (!t.estimated.ftp || estimateFtp(acts)) {
+  } else if (!t.estimated.ftp || estimateFtp(usable(acts, t))) {
     const p5 = t.ftp / 0.82;
     vo2 = (10.8 * p5) / p.weightKg + 7;
     source = "bike";

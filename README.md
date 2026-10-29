@@ -20,7 +20,21 @@ It runs full-screen from the home screen, works offline, and adapts its layout t
   Daily targets adapt to the day's training (carbs g/kg by training hours).
 - **Profile**: weight (with history), height, age, sex, HR/FTP/pace/CSS thresholds, rest-day preference.
 
-All data stays on the device (IndexedDB). Use Settings → Export backup to move between phones.
+- **Data-quality filter**: implausible workouts (e.g. a pool watch miscounting lengths) still count as load but don't skew
+  your zones; each workout has "trust" / "use for estimates" switches.
+- **Manual logging & plan tracking**: log swims without a watch, mark sessions done/skipped, move sessions, and mark
+  sick/travel periods (the plan eases you back in after illness).
+- **Zwift & treadmill**: every ride downloads as a Zwift `.zwo` workout; every run shows treadmill speed at 1% incline.
+- **Swim comeback block** after a long break from the pool, plus **scheduled fitness tests** (FTP, 30-min run, CSS) with
+  calculators that update your zones.
+- **Heat & hydration**: local conditions → pace adjustment, sweat-rate tests, fluid and sodium targets.
+- **Race-day plan**: heat-adjusted pacing, minute-by-minute fueling, carb-load and race-morning plan (printable).
+- **Morning check-in**: sleep, soreness, energy, stress, resting HR/HRV → readiness score that steers the coach.
+- **Faster food logging**: favourites, recent meals, Malaysian dishes, water tracker, automatic carb-load targets.
+- **Calendar**: one-off `.ics` export or an auto-updating subscription link (via cloud sync).
+- **Cloud backup & sync**: encrypted (AES-GCM, passphrase) backup in a secret GitHub Gist; merges between devices.
+
+All data stays on the device (IndexedDB) unless you turn on cloud sync. Settings → Export backup also works.
 
 ## Run locally
 
