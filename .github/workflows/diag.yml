@@ -1,4 +1,4 @@
-name: Strava CORS diagnostic
+name: Open Food Facts diagnostic
 on:
   push:
     branches: [diag]
@@ -6,17 +6,12 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe Strava endpoints with a browser Origin
+      - name: Probe Open Food Facts with a browser Origin
         run: |
           O="Origin: https://aminjimmy.github.io"
-          probe() {
-            label="$1"; shift
-            h=$(curl -s -D - -o /dev/null "$@" | tr -d '\r' | grep -iE '^HTTP|^access-control' | tr '\n' ' ')
-            echo "::warning title=$label::$h"
-          }
-          probe "token-preflight-json" -X OPTIONS https://www.strava.com/oauth/token -H "$O" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type"
-          probe "token-post-json" -X POST https://www.strava.com/oauth/token -H "$O" -H "Content-Type: application/json" -d '{"client_id":"1","client_secret":"x","code":"x","grant_type":"authorization_code"}'
-          probe "token-post-form" -X POST https://www.strava.com/oauth/token -H "$O" -d client_id=1 -d client_secret=x -d code=x -d grant_type=authorization_code
-          probe "api-preflight-auth" -X OPTIONS "https://www.strava.com/api/v3/athlete/activities" -H "$O" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: authorization"
-          probe "api-get-bearer" "https://www.strava.com/api/v3/athlete/activities" -H "$O" -H "Authorization: Bearer x"
-          probe "api-get-querytoken" "https://www.strava.com/api/v3/athlete/activities?access_token=x" -H "$O"
+          h=$(curl -s -D - -o /tmp/p.json -H "$O" "https://world.openfoodfacts.org/api/v2/product/3017620422003.json?fields=code,product_name,brands,serving_quantity,nutriments" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
+          echo "::warning title=product-cors::$h"
+          echo "::warning title=product-body::$(python3 -c "import json;p=json.load(open('/tmp/p.json'))['product'];n=p['nutriments'];print(p.get('product_name'),'|',p.get('serving_quantity'),'| kcal',n.get('energy-kcal_100g'),'carbs',n.get('carbohydrates_100g'),'prot',n.get('proteins_100g'),'fat',n.get('fat_100g'))")"
+          h=$(curl -s -D - -o /tmp/s.json -H "$O" "https://world.openfoodfacts.org/cgi/search.pl?search_terms=milo&search_simple=1&action=process&json=1&page_size=5&fields=code,product_name,brands&tagtype_0=countries&tag_contains_0=contains&tag_0=malaysia" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
+          echo "::warning title=search-cors::$h"
+          echo "::warning title=search-body::$(python3 -c "import json;d=json.load(open('/tmp/s.json'));print(d.get('count'),'results:', '; '.join((p.get('brands','') or '')+' '+(p.get('product_name','') or '')+' ['+p.get('code','')+']' for p in d.get('products',[])[:5]))")"
