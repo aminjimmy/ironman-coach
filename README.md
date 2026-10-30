@@ -31,6 +31,8 @@ It runs full-screen from the home screen, works offline, and adapts its layout t
 - **Race-day plan**: heat-adjusted pacing, minute-by-minute fueling, carb-load and race-morning plan (printable).
 - **Morning check-in**: sleep, soreness, energy, stress, resting HR/HRV → readiness score that steers the coach.
 - **Faster food logging**: favourites, recent meals, Malaysian dishes, water tracker, automatic carb-load targets.
+- **Barcode scanning (free, no API key)**: scan packaged food with the camera (Chrome's built-in barcode reader) or
+  search by name; label nutrition comes from [Open Food Facts](https://world.openfoodfacts.org), the open food database.
 - **Calendar**: one-off `.ics` export or an auto-updating subscription link (via cloud sync).
 - **Cloud backup & sync**: encrypted (AES-GCM, passphrase) backup in a secret GitHub Gist; merges between devices.
 

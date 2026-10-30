@@ -9,6 +9,7 @@ import { searchFoods } from "../lib/foods";
 import { typicalSweatRate, fluidPlan } from "../lib/heat";
 import type { FoodTemplate } from "../lib/types";
 import { Card, MacroRing, Sheet, Spinner, Stat, toast } from "../components/ui";
+import { BarcodeScanner } from "../components/BarcodeScanner";
 
 const MEALS: FoodEntry["meal"][] = ["breakfast", "lunch", "dinner", "snack", "fuel"];
 
@@ -31,6 +32,7 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
   const camRef = useRef<HTMLInputElement>(null);
   const galRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   const dayFoods = foods.filter((f) => f.date === date).sort((a, b) => (a.time < b.time ? -1 : 1));
   const dayActs = acts.filter((a) => a.start.slice(0, 10) === date);
@@ -127,13 +129,14 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
         <Card title="Log food">
           <div className="stack" style={{ gap: 8 }}>
             <button className="btn primary block" onClick={() => camRef.current?.click()}>📷 Snap a meal</button>
+            <button className="btn block" onClick={() => setScanning(true)}>▦ Scan barcode (packaged food)</button>
             <div className="row">
               <button className="btn grow" onClick={() => galRef.current?.click()}>🖼️ From gallery</button>
               <button className="btn grow" onClick={manual}>✏️ Manual entry</button>
             </div>
             {!apiKey && (
               <div className="small" style={{ color: "var(--warn)" }}>
-                Photo analysis needs an Anthropic API key. <a href="#/settings" onClick={(e) => { e.preventDefault(); go("settings"); }}>Add it in Settings</a>.
+                Photo analysis needs an Anthropic API key (<a href="#/settings" onClick={(e) => { e.preventDefault(); go("settings"); }}>Settings</a>). Without one, use barcode scan, Quick add → Local dishes, or manual entry.
               </div>
             )}
           </div>
@@ -179,6 +182,23 @@ export function Fuel({ d, go }: { d: Derived; go: (r: string) => void }) {
           })}
         </div>
       </Card>
+
+      {scanning && (
+        <Sheet onClose={() => setScanning(false)}>
+          <BarcodeScanner
+            onClose={() => setScanning(false)}
+            onFound={(item, title, missing) => {
+              setScanning(false);
+              setDraft({
+                id: uid(), date, time: new Date().toTimeString().slice(0, 5), meal: guessMeal(), title, items: [item],
+                notes: missing
+                  ? "Found the product, but Open Food Facts has no nutrition data for it yet. Copy kcal, carbs, protein and fat from the label (per portion)."
+                  : "From Open Food Facts (product label). Adjust grams to what you ate.",
+              });
+            }}
+          />
+        </Sheet>
+      )}
 
       {preview && !draft && (
         <Sheet onClose={closeAll}>
@@ -256,7 +276,7 @@ function FoodEditor({ entry, onSave, onCancel, onDelete }: {
         </div>
       </div>
       {e.photo && <img className="photo-lg" src={e.photo} alt="" style={{ maxHeight: 160 }} />}
-      {e.notes && <div className="small muted">🤖 {e.notes}</div>}
+      {e.notes && <div className="small muted">{e.confidence ? "🤖 " : "ℹ️ "}{e.notes}</div>}
       <div className="form-grid">
         <label className="field" style={{ gridColumn: "1 / -1" }}>
           <span>Name</span>
@@ -307,7 +327,7 @@ function FoodEditor({ entry, onSave, onCancel, onDelete }: {
         <button className="btn" onClick={onCancel}>Cancel</button>
         {onDelete && <button className="btn danger" onClick={onDelete}>Delete</button>}
       </div>
-      <p className="tiny muted">AI estimates from photos are typically within ±20–30%. Adjust portions if you know them.</p>
+      {e.confidence && <p className="tiny muted">AI estimates from photos are typically within ±20–30%. Adjust portions if you know them.</p>}
     </div>
   );
 }
