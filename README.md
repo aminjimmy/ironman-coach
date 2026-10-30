@@ -67,8 +67,8 @@ Then on the Z Fold: open the URL in **Chrome** → ⋮ → **Add to home screen*
 to your app's host (e.g. `username.github.io`). Paste the Client ID and Client Secret in Settings → Connect.
 
 **Food photos**: create an API key at https://console.anthropic.com/settings/keys and paste it in Settings.
-Each photo costs roughly 1–3 US cents. The app calls `claude-opus-5-5` with structured JSON output and
-server-side refusal fallback (`fallbacks: "default"`).
+Each photo costs roughly 0.05 US cents (US$5 of credit covers thousands of meals). The app calls
+`claude-haiku-5-5` with structured JSON output.
 
 ## Notes on the numbers
 

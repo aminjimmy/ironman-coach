@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { FoodItem } from "./types";
 
-const MODEL = "claude-opus-5-5";
+// Cheapest current Claude model (~0.05 US cents per photo); accurate enough for meal estimates
+const MODEL = "claude-haiku-5-5";
 
 const FoodSchema = z.object({
   title: z.string(),
@@ -75,11 +76,9 @@ export async function analyzeFood(apiKey: string, imageDataUrl: string, hint: st
 
   let response;
   try {
-    response = await client.beta.messages.create({
+    response = await client.messages.create({
       model: MODEL,
       max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       system: SYSTEM,
       output_config: {
         effort: "medium",

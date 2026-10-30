@@ -140,7 +140,7 @@ export function Settings({ go }: { go: (r: string) => void }) {
           <div className="stack">
             <div className="small" style={{ color: "var(--text-2)" }}>
               Meal photos are analysed by Claude. Create an API key at{" "}
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (pay-as-you-go, about 1–3 US cents per photo).
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (pay-as-you-go, about 0.05 US cents per photo; US$5 of credit lasts thousands of meals).
             </div>
             <label className="field">
               <span>Anthropic API key</span>
