@@ -6,12 +6,13 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe Open Food Facts with a browser Origin
+      - name: Probe Open Food Facts search endpoints
         run: |
           O="Origin: https://aminjimmy.github.io"
-          h=$(curl -s -D - -o /tmp/p.json -H "$O" "https://world.openfoodfacts.org/api/v2/product/3017620422003.json?fields=code,product_name,brands,serving_quantity,nutriments" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
-          echo "::warning title=product-cors::$h"
-          echo "::warning title=product-body::$(python3 -c "import json;p=json.load(open('/tmp/p.json'))['product'];n=p['nutriments'];print(p.get('product_name'),'|',p.get('serving_quantity'),'| kcal',n.get('energy-kcal_100g'),'carbs',n.get('carbohydrates_100g'),'prot',n.get('proteins_100g'),'fat',n.get('fat_100g'))")"
-          h=$(curl -s -D - -o /tmp/s.json -H "$O" "https://world.openfoodfacts.org/cgi/search.pl?search_terms=milo&search_simple=1&action=process&json=1&page_size=5&fields=code,product_name,brands&tagtype_0=countries&tag_contains_0=contains&tag_0=malaysia" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
-          echo "::warning title=search-cors::$h"
-          echo "::warning title=search-body::$(python3 -c "import json;d=json.load(open('/tmp/s.json'));print(d.get('count'),'results:', '; '.join((p.get('brands','') or '')+' '+(p.get('product_name','') or '')+' ['+p.get('code','')+']' for p in d.get('products',[])[:5]))")"
+          h=$(curl -s -D - -o /tmp/a.json -H "$O" "https://search.openfoodfacts.org/search?q=milo%20countries_tags:%22en:malaysia%22&page_size=5&fields=code,product_name,brands,nutriments,serving_quantity" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
+          echo "::warning title=sal-cors::$h"
+          echo "::warning title=sal-body::$(python3 -c "import json;d=json.load(open('/tmp/a.json'));print(d.get('count'),'|', '; '.join(str(p.get('brands'))+' '+str(p.get('product_name'))+' ['+str(p.get('code'))+'] kcal='+str((p.get('nutriments') or {}).get('energy-kcal_100g')) for p in d.get('hits',[])[:5]))" 2>&1 | head -c 900)"
+          h=$(curl -s -D - -o /tmp/s.json -H "$O" "https://world.openfoodfacts.org/cgi/search.pl?search_terms=milo&search_simple=1&action=process&json=1&page_size=5&fields=code,product_name,brands" | tr -d '\r' | grep -iE '^HTTP|^access-control-allow-origin' | tr '\n' ' ')
+          echo "::warning title=legacy-search::$h"
+          h=$(curl -s -D - -o /tmp/m.json -H "$O" "https://search.openfoodfacts.org/search?q=countries_tags:%22en:malaysia%22&page_size=1&fields=code" | tr -d '\r' | grep -iE '^HTTP' | tr '\n' ' ')
+          echo "::warning title=malaysia-count::$h $(python3 -c "import json;print(json.load(open('/tmp/m.json')).get('count'))" 2>&1)"
